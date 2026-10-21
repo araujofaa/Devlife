@@ -1,0 +1,247 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String
+  password_hash String
+  email_verified        Boolean   @default(false)
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+  
+  phone_number  String?
+  phone_verified Boolean  @default(false)
+
+  failed_login_attempts Int       @default(0)
+  locked_until          DateTime?
+
+  sessions      Session[]
+  refreshTokens RefreshToken[]
+  tasks         Task[]
+  notes         Note[]
+  notifications Notification[]
+  attachments Attachment[]
+  categories Category[] 
+  reminder_offset_hours Int? @default(24)
+  
+  pushSubscriptions    PushSubscription[]
+  devices              UserDevice[]        // 🆕 ADICIONADO AQUI
+  
+  emailVerifications    EmailVerificationToken[]
+  passwordResets     PasswordResetToken[]
+  
+  @@map("users")
+}
+
+model UserDevice {
+  id         String   @id @default(cuid())
+  user_id    String
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  push_token String   @unique
+  platform   String   // 'ios' | 'android'
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@index([user_id])
+  @@map("user_devices")
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  user_id    String
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  token      String   @unique
+  expires_at DateTime
+  created_at DateTime @default(now())
+
+  @@map("sessions")
+}
+
+model RefreshToken {
+  id         String   @id @default(cuid())
+  user_id    String
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  token      String   @unique
+  expires_at DateTime
+  created_at DateTime @default(now())
+
+  @@map("refresh_tokens")
+}
+
+model Task {
+  id          String    @id @default(cuid())
+  user_id     String
+  user        User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  title       String
+  description String?   @db.Text
+  priority    String    @default("medium")
+  status      String    @default("pending")
+  due_date    DateTime?
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+  deleted_at DateTime?
+
+  recurrence_type      String?
+  recurrence_interval  Int?      @default(1)
+  recurrence_end_date  DateTime?
+  recurrence_parent_id String?
+
+  subtasks    Subtask[]
+  attachments Attachment[]
+  categories TaskCategory[]
+
+  @@index([user_id])
+  @@index([priority])
+  @@index([status])
+  @@index([due_date])
+  @@map("tasks")
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  user_id   String
+  user      User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  title     String
+  message   String
+  read      Boolean  @default(false)
+  created_at DateTime @default(now())
+
+  @@index([user_id])
+  @@index([read])
+  @@map("notifications")
+}
+
+model Note {
+  id         String    @id @default(cuid())
+  user_id    String
+  user       User      @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  title      String
+  content    String    @db.Text
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+  attachments Attachment[]
+  categories NoteCategory[]
+
+  @@index([user_id])
+  @@map("notes")
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  user_id   String
+  user      User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  created_at DateTime @default(now())
+
+  @@index([user_id])
+  @@map("push_subscriptions")
+}
+
+model Subtask {
+  id          String   @id @default(cuid())
+  task_id     String
+  task        Task     @relation(fields: [task_id], references: [id], onDelete: Cascade)
+  title       String
+  completed   Boolean  @default(false)
+  completed_at DateTime?
+  due_date     DateTime?
+  order      Int      @default(0)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@index([task_id])
+  @@index([due_date])
+  @@map("subtasks")
+}
+
+model EmailVerificationToken {
+  id         String   @id @default(cuid())
+  user_id    String
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  token      String   @unique
+  expires_at DateTime
+  created_at DateTime @default(now())
+
+  @@index([user_id])
+  @@map("email_verification_tokens")
+}
+
+model PasswordResetToken {
+  id         String   @id @default(cuid())
+  user_id    String
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  token      String   @unique
+  expires_at DateTime
+  created_at DateTime @default(now())
+
+  @@index([user_id])
+  @@map("password_reset_tokens")
+}
+
+model Attachment {
+  id          String   @id @default(cuid())
+  user_id     String
+  user        User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  task_id     String?
+  task        Task?    @relation(fields: [task_id], references: [id], onDelete: Cascade)
+  note_id     String?
+  note        Note?    @relation(fields: [note_id], references: [id], onDelete: Cascade)
+  filename    String
+  stored_name String
+  mime_type   String
+  size        Int
+  created_at  DateTime @default(now())
+
+  @@index([user_id])
+  @@index([task_id])
+  @@index([note_id])
+  @@map("attachments")
+}
+
+model Category {
+  id         String   @id @default(cuid())
+  user_id    String
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  name       String
+  color      String   @default("#3b82f6")
+  icon       String   @default("tag")
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  tasks      TaskCategory[]
+  notes      NoteCategory[]
+
+  @@unique([user_id, name])
+  @@index([user_id])
+  @@map("categories")
+}
+
+model TaskCategory {
+  task_id     String
+  category_id String
+  task        Task     @relation(fields: [task_id], references: [id], onDelete: Cascade)
+  category    Category @relation(fields: [category_id], references: [id], onDelete: Cascade)
+
+  @@id([task_id, category_id])
+  @@map("task_categories")
+}
+
+model NoteCategory {
+  note_id     String
+  category_id String
+  note        Note     @relation(fields: [note_id], references: [id], onDelete: Cascade)
+  category    Category @relation(fields: [category_id], references: [id], onDelete: Cascade)
+
+  @@id([note_id, category_id])
+  @@map("note_categories")
+}
