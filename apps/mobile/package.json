@@ -13,7 +13,6 @@
     "build": "cross-env NODE_OPTIONS=--max-old-space-size=4096 expo export",
     "lint": "eslint . --ext .ts,.tsx",
     "type-check": "tsc --noEmit"
-    
   },
   "dependencies": {
     "@devlife/api-client": "workspace:*",
@@ -41,6 +40,7 @@
     "react-native-calendars": "^1.1314.0",
     "react-native-gesture-handler": "~2.32.0",
     "react-native-paper": "^5.15.3",
+    "react-native-reanimated": "4.5.1",
     "react-native-safe-area-context": "5.7.0",
     "react-native-screens": "~4.26.2",
     "react-native-web": "~0.21.2",
