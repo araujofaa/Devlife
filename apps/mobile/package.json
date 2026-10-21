@@ -4,6 +4,7 @@
   "main": "expo-router/entry",
   "scripts": {
     "start": "cross-env NODE_OPTIONS=--max-old-space-size=4096 expo start",
+    "eas-build-post-install": "node ../../patch-gradle.js",
     "dev": "cross-env NODE_OPTIONS=--max-old-space-size=4096 expo start",
     "android": "cross-env NODE_OPTIONS=--max-old-space-size=4096 expo start --android",
     "ios": "cross-env NODE_OPTIONS=--max-old-space-size=4096 expo start --ios",
@@ -12,6 +13,7 @@
     "build": "cross-env NODE_OPTIONS=--max-old-space-size=4096 expo export",
     "lint": "eslint . --ext .ts,.tsx",
     "type-check": "tsc --noEmit"
+    
   },
   "dependencies": {
     "@devlife/api-client": "workspace:*",
@@ -23,6 +25,7 @@
     "@hookform/resolvers": "^5.9.2",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/netinfo": "12.0.1",
+    "@react-native/gradle-plugin": "^0.88.0",
     "@tanstack/react-query": "^5.101.4",
     "expo": "57.0.30",
     "expo-constants": "~57.0.22",
