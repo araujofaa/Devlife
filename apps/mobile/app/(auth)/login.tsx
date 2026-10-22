@@ -31,13 +31,35 @@ export default function LoginScreen() {
       <View style={styles.inner}>
         <Text style={styles.title}>DevLife</Text>
         <Text style={styles.subtitle}>Login</Text>
+
         {error ? <Text style={styles.error}>{error}</Text> : null}
-        <TextInput style={styles.input} placeholder="E-mail" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" />
-        <TextInput style={styles.input} placeholder="Senha" value={password} onChangeText={setPassword} secureTextEntry />
+
+        <TextInput
+          style={styles.input}
+          placeholder="E-mail"
+          value={email}
+          onChangeText={setEmail}
+          autoCapitalize="none"
+          keyboardType="email-address"
+        />
+        <TextInput
+          style={styles.input}
+          placeholder="Senha"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
+        />
+
+        {/* 🆕 Link de Esqueci a Senha */}
+        <Link href={"/(auth)/forgot-password" as any} style={styles.forgotPasswordLink}>
+          <Text style={styles.forgotPasswordText}>Esqueci minha senha</Text>
+        </Link>
+
         <TouchableOpacity style={styles.button} onPress={handleLogin} disabled={loading}>
           {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Entrar</Text>}
         </TouchableOpacity>
-        <Link href="/(auth)/register" style={styles.link}>
+
+        <Link href={"/(auth)/register" as any} style={styles.link}>
           <Text>Não tem conta? Cadastre-se</Text>
         </Link>
       </View>
@@ -51,8 +73,10 @@ const styles = StyleSheet.create({
   title: { fontSize: 32, fontWeight: 'bold', color: '#2563eb', textAlign: 'center' },
   subtitle: { fontSize: 20, fontWeight: '600', textAlign: 'center', marginVertical: 20 },
   input: { backgroundColor: '#fff', padding: 14, borderRadius: 8, marginBottom: 12, borderWidth: 1, borderColor: '#ddd' },
-  button: { backgroundColor: '#2563eb', padding: 16, borderRadius: 8, alignItems: 'center' },
+  button: { backgroundColor: '#2563eb', padding: 16, borderRadius: 8, alignItems: 'center', marginTop: 8 },
   buttonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
   error: { color: 'red', textAlign: 'center', marginBottom: 12 },
   link: { marginTop: 16, textAlign: 'center' },
+  forgotPasswordLink: { alignSelf: 'flex-end', marginBottom: 16 },
+  forgotPasswordText: { color: '#2563eb', fontSize: 14 },
 });

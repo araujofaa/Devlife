@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { CategorySelector } from '@/src/components/CategorySelector';
 import { RecurrenceSelector } from '@/src/components/RecurrenceSelector';
 import { CustomModal } from '@/src/components/CustomModal';
+import { AttachmentManager } from '@/src/components/AttachmentManager'; // 🆕 Import
 import { Calendar, LocaleConfig } from 'react-native-calendars';
 
 // 🌍 Configuração do Calendário em Português
@@ -38,24 +39,20 @@ export default function EditTaskScreen() {
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
   const [recurrence, setRecurrence] = useState({ type: null as string | null, interval: 1, endDate: '' });
   
-  // Estados das Subtarefas
   const [subtasks, setSubtasks] = useState<Subtask[]>([]);
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
   const [editingSubtaskId, setEditingSubtaskId] = useState<string | null>(null);
   const [editingSubtaskTitle, setEditingSubtaskTitle] = useState('');
 
-  // 🆕 Estados para o Modal de Data Principal (Tarefa)
   const [isMainDateModalOpen, setIsMainDateModalOpen] = useState(false);
   const [mainSelectedDate, setMainSelectedDate] = useState('');
   const [mainSelectedTime, setMainSelectedTime] = useState('');
 
-  // Estados para o Modal de Data da Subtarefa
   const [subtaskToEditDate, setSubtaskToEditDate] = useState<Subtask | null>(null);
   const [selectedDate, setSelectedDate] = useState('');
   const [selectedTime, setSelectedTime] = useState('');
   const [savingDate, setSavingDate] = useState(false);
 
-  // Estados para Exclusão de Subtarefa
   const [subtaskToDelete, setSubtaskToDelete] = useState<string | null>(null);
   const [deletingSub, setDeletingSub] = useState(false);
 
@@ -95,6 +92,12 @@ export default function EditTaskScreen() {
     if (id) load();
   }, [id]);
 
+  const updateCacheSubtasks = async (newSubs: Subtask[]) => {
+    const cached = (await storage.getItem<any[]>('tasks_cache')) ?? [];
+    const updatedCache = cached.map(t => t.id === id ? { ...t, subtasks: newSubs } : t);
+    await storage.setItem('tasks_cache', updatedCache);
+  };
+
   const handleUpdate = async () => {
     if (!title.trim()) { setError('O título é obrigatório'); return; }
     setUpdating(true);
@@ -102,7 +105,7 @@ export default function EditTaskScreen() {
     try {
       const payload = {
         title: title.trim(),
-        description: description.trim() || null,
+        description: description.trim() || undefined,
         priority, status,
         due_date: dueDate || null,
         categoryIds,
@@ -123,14 +126,15 @@ export default function EditTaskScreen() {
     }
   };
 
-  // --- Lógica de Subtarefas ---
   const handleAddSubtask = async () => {
     if (!newSubtaskTitle.trim()) return;
     try {
       const res = await apiClient.post(`/tasks/${id}/subtasks`, { title: newSubtaskTitle.trim() });
       if (res.success) {
-        setSubtasks([...subtasks, res.data]);
+        const newSubs = [...subtasks, res.data];
+        setSubtasks(newSubs);
         setNewSubtaskTitle('');
+        await updateCacheSubtasks(newSubs);
       }
     } catch { 
       setError('Não foi possível adicionar subtarefa.'); 
@@ -138,23 +142,32 @@ export default function EditTaskScreen() {
   };
 
   const handleToggleSubtask = async (subId: string, currentCompleted: boolean) => {
-    setSubtasks(subtasks.map(s => s.id === subId ? { ...s, completed: !currentCompleted } : s));
+    const newSubs = subtasks.map(s => s.id === subId ? { ...s, completed: !currentCompleted } : s);
+    setSubtasks(newSubs);
+    await updateCacheSubtasks(newSubs);
+
     try {
       await apiClient.patch(`/tasks/${id}/subtasks/${subId}`, { completed: !currentCompleted });
     } catch { 
-      setSubtasks(subtasks.map(s => s.id === subId ? { ...s, completed: currentCompleted } : s)); 
+      setSubtasks(subtasks); 
+      await updateCacheSubtasks(subtasks);
     }
   };
 
   const handleSaveSubtaskTitle = async (subId: string) => {
     if (!editingSubtaskTitle.trim()) { setEditingSubtaskId(null); return; }
     const oldTitle = subtasks.find(s => s.id === subId)?.title;
-    setSubtasks(subtasks.map(s => s.id === subId ? { ...s, title: editingSubtaskTitle.trim() } : s));
+    
+    const newSubs = subtasks.map(s => s.id === subId ? { ...s, title: editingSubtaskTitle.trim() } : s);
+    setSubtasks(newSubs);
     setEditingSubtaskId(null);
+    await updateCacheSubtasks(newSubs);
+    
     try {
       await apiClient.patch(`/tasks/${id}/subtasks/${subId}`, { title: editingSubtaskTitle.trim() });
     } catch { 
       setSubtasks(subtasks.map(s => s.id === subId ? { ...s, title: oldTitle || '' } : s));
+      await updateCacheSubtasks(subtasks);
       setError('Erro ao salvar a edição da subtarefa.'); 
     }
   };
@@ -162,8 +175,11 @@ export default function EditTaskScreen() {
   const handleConfirmDeleteSubtask = async () => {
     if (!subtaskToDelete) return;
     setDeletingSub(true);
+    
     const newSubs = subtasks.filter(s => s.id !== subtaskToDelete);
     setSubtasks(newSubs);
+    await updateCacheSubtasks(newSubs);
+
     try {
       await apiClient.delete(`/tasks/${id}/subtasks/${subtaskToDelete}`);
     } catch (err) {
@@ -174,7 +190,6 @@ export default function EditTaskScreen() {
     }
   };
 
-  // 🆕 Lógica do Modal de Data Principal
   const openMainDateModal = () => {
     if (dueDate) {
       const d = new Date(dueDate);
@@ -196,7 +211,6 @@ export default function EditTaskScreen() {
     setIsMainDateModalOpen(false);
   };
 
-  // --- Lógica de Data da Subtarefa ---
   const openSubtaskDateEditor = (sub: Subtask) => {
     setSubtaskToEditDate(sub);
     if (sub.due_date) {
@@ -212,15 +226,18 @@ export default function EditTaskScreen() {
   const handleSaveSubtaskDate = async () => {
     if (!subtaskToEditDate || !selectedDate) return;
     setSavingDate(true);
+    
     try {
       const [year, month, day] = selectedDate.split('-').map(Number);
       const [hours, minutes] = selectedTime.split(':').map(Number);
       const localDate = new Date(year, month - 1, day, hours || 0, minutes || 0);
       const isoDate = localDate.toISOString();
 
-      setSubtasks(subtasks.map(s => 
+      const newSubs = subtasks.map(s => 
         s.id === subtaskToEditDate.id ? { ...s, due_date: isoDate } : s
-      ));
+      );
+      setSubtasks(newSubs);
+      await updateCacheSubtasks(newSubs);
       
       await apiClient.patch(`/tasks/${id}/subtasks/${subtaskToEditDate.id}`, { due_date: isoDate });
       setSubtaskToEditDate(null);
@@ -234,7 +251,11 @@ export default function EditTaskScreen() {
   const removeSubtaskDate = async () => {
     if (!subtaskToEditDate) return;
     setSavingDate(true);
-    setSubtasks(subtasks.map(s => s.id === subtaskToEditDate.id ? { ...s, due_date: null } : s));
+    
+    const newSubs = subtasks.map(s => s.id === subtaskToEditDate.id ? { ...s, due_date: null } : s);
+    setSubtasks(newSubs);
+    await updateCacheSubtasks(newSubs);
+
     try {
       await apiClient.patch(`/tasks/${id}/subtasks/${subtaskToEditDate.id}`, { due_date: null });
       setSubtaskToEditDate(null);
@@ -277,7 +298,6 @@ export default function EditTaskScreen() {
         ))}
       </View>
 
-      {/* 🆕 Campo de Data com Calendário */}
       <Text style={styles.label}>Data de Vencimento</Text>
       <TouchableOpacity style={styles.dateInput} onPress={openMainDateModal}>
         <Ionicons name="calendar-outline" size={20} color="#2563eb" />
@@ -355,6 +375,9 @@ export default function EditTaskScreen() {
         </View>
       </View>
 
+      {/* 🆕 AQUI ESTÁ A INTEGRAÇÃO DOS ANEXOS */}
+      <AttachmentManager taskId={id as string} />
+
       {error ? <Text style={styles.error}>{error}</Text> : null}
       
       <View style={styles.actionRow}>
@@ -367,7 +390,7 @@ export default function EditTaskScreen() {
       </View>
       <View style={{ height: 40 }} />
 
-      {/* 🆕 Modal de Calendário Principal */}
+      {/* Modais de Data Principal */}
       <CustomModal visible={isMainDateModalOpen} onRequestClose={() => setIsMainDateModalOpen(false)}>
         <View style={styles.modalOverlayCalendar}>
           <View style={styles.modalContentCalendar}>
@@ -377,21 +400,13 @@ export default function EditTaskScreen() {
                 <Ionicons name="close" size={24} color="#6b7280" />
               </TouchableOpacity>
             </View>
-            
             <Calendar
               current={mainSelectedDate}
               onDayPress={(day: any) => setMainSelectedDate(day.dateString)}
-              markedDates={{
-                [mainSelectedDate]: { selected: true, selectedColor: '#2563eb' }
-              }}
-              theme={{
-                todayTextColor: '#2563eb',
-                arrowColor: '#2563eb',
-                selectedDayBackgroundColor: '#2563eb',
-              }}
+              markedDates={{ [mainSelectedDate]: { selected: true, selectedColor: '#2563eb' } }}
+              theme={{ todayTextColor: '#2563eb', arrowColor: '#2563eb', selectedDayBackgroundColor: '#2563eb' }}
               style={{ borderRadius: 8, marginBottom: 16 }}
             />
-
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 24 }}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.label}>Hora e Minuto (HH:mm)</Text>
@@ -404,7 +419,6 @@ export default function EditTaskScreen() {
                 />
               </View>
             </View>
-            
             <View style={styles.modalActionsCalendar}>
               {dueDate ? (
                 <TouchableOpacity style={styles.removeDateBtn} onPress={() => { setDueDate(''); setIsMainDateModalOpen(false); }}>
@@ -412,7 +426,6 @@ export default function EditTaskScreen() {
                   <Text style={{ color: '#ef4444', fontWeight: 'bold' }}>Remover</Text>
                 </TouchableOpacity>
               ) : <View style={{ flex: 1 }} />}
-              
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 <TouchableOpacity style={styles.cancelBtn} onPress={() => setIsMainDateModalOpen(false)}>
                   <Text style={styles.cancelBtnText}>Cancelar</Text>
@@ -426,7 +439,7 @@ export default function EditTaskScreen() {
         </View>
       </CustomModal>
 
-      {/* Modal de Calendário da Subtarefa (Mantido) */}
+      {/* Modal Data Subtarefa */}
       <CustomModal visible={!!subtaskToEditDate} onRequestClose={() => setSubtaskToEditDate(null)}>
         <View style={styles.modalOverlayCalendar}>
           <View style={styles.modalContentCalendar}>
@@ -436,23 +449,14 @@ export default function EditTaskScreen() {
                 <Ionicons name="close" size={24} color="#6b7280" />
               </TouchableOpacity>
             </View>
-            
             <Text style={styles.modalSubtitle} numberOfLines={1}>{subtaskToEditDate?.title}</Text>
-            
             <Calendar
               current={selectedDate}
               onDayPress={(day: any) => setSelectedDate(day.dateString)}
-              markedDates={{
-                [selectedDate]: { selected: true, selectedColor: '#2563eb' }
-              }}
-              theme={{
-                todayTextColor: '#2563eb',
-                arrowColor: '#2563eb',
-                selectedDayBackgroundColor: '#2563eb',
-              }}
+              markedDates={{ [selectedDate]: { selected: true, selectedColor: '#2563eb' } }}
+              theme={{ todayTextColor: '#2563eb', arrowColor: '#2563eb', selectedDayBackgroundColor: '#2563eb' }}
               style={{ borderRadius: 8, marginBottom: 16 }}
             />
-
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 24 }}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.label}>Hora (HH:mm)</Text>
@@ -465,7 +469,6 @@ export default function EditTaskScreen() {
                 />
               </View>
             </View>
-            
             <View style={styles.modalActionsCalendar}>
               {subtaskToEditDate?.due_date ? (
                 <TouchableOpacity style={styles.removeDateBtn} onPress={removeSubtaskDate} disabled={savingDate}>
@@ -473,7 +476,6 @@ export default function EditTaskScreen() {
                   <Text style={{ color: '#ef4444', fontWeight: 'bold' }}>Remover</Text>
                 </TouchableOpacity>
               ) : <View style={{ flex: 1 }} />}
-              
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 <TouchableOpacity style={styles.cancelBtn} onPress={() => setSubtaskToEditDate(null)} disabled={savingDate}>
                   <Text style={styles.cancelBtnText}>Cancelar</Text>
@@ -487,7 +489,7 @@ export default function EditTaskScreen() {
         </View>
       </CustomModal>
 
-      {/* Modal de Exclusão de Subtarefa (Mantido) */}
+      {/* Modal Exclusão Subtarefa */}
       <CustomModal visible={!!subtaskToDelete} onRequestClose={() => setSubtaskToDelete(null)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -547,7 +549,7 @@ const styles = StyleSheet.create({
   modalOverlayCalendar: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
   modalContentCalendar: { backgroundColor: '#fff', padding: 20, borderRadius: 16, width: '90%', maxWidth: 450, maxHeight: '90%' },
   modalActionsCalendar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 },
-  modalTitle: { fontSize: 20, fontWeight: 'bold', color: '#111827' },
+  modalTitle: { fontSize: 20, fontWeight: 'bold', color: '#111827', marginBottom: 8 },
   modalSubtitle: { fontSize: 14, color: '#6b7280', marginBottom: 12, fontStyle: 'italic' },
   modalText: { fontSize: 15, color: '#6b7280', marginBottom: 24 },
   modalActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 24 },

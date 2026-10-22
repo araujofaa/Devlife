@@ -33,11 +33,11 @@ interface Task {
   categories?: { category: Category }[];
   subtasks?: Subtask[];
   recurrence_type?: string | null;
+  _count?: { attachments: number }; // 🆕 Adicionado
 }
 
 type TabType = 'pending' | 'done' | 'all';
 
-// Função para ordenar subtarefas por data (mais próxima primeiro, sem data no final)
 const sortSubtasksByDate = (subtasks: Subtask[]) => {
   return [...subtasks].sort((a, b) => {
     if (!a.due_date && !b.due_date) return 0;
@@ -54,18 +54,15 @@ export default function TasksScreen() {
   const [search, setSearch] = useState('');
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
   
-  // Estados de Exclusão
   const [taskToDelete, setTaskToDelete] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  // Estados de Edição Rápida (Metadados da Tarefa Principal)
   const [editingTask, setEditingTask] = useState<{ task: Task; field: 'priority' | 'status' | 'date' | 'category' } | null>(null);
   const [savingMeta, setSavingMeta] = useState(false);
   const [selectedDate, setSelectedDate] = useState('');
   const [selectedTime, setSelectedTime] = useState('');
   const [tempCategoryIds, setTempCategoryIds] = useState<string[]>([]);
 
-  // Estados para Editar Data da Subtarefa
   const [subtaskDateEdit, setSubtaskDateEdit] = useState<{ taskId: string; subtask: Subtask } | null>(null);
   const [subSelectedDate, setSubSelectedDate] = useState('');
   const [subSelectedTime, setSubSelectedTime] = useState('');
@@ -109,31 +106,25 @@ export default function TasksScreen() {
   };
 
   const handleToggleSubtask = async (taskId: string, subtaskId: string, currentCompleted: boolean) => {
-    // 1. Atualiza o estado visual (React)
-    const updatedTasks = tasks.map(t => 
+    setTasks(tasks.map(t => 
       t.id === taskId 
         ? { ...t, subtasks: t.subtasks?.map(s => s.id === subtaskId ? { ...s, completed: !currentCompleted } : s) }
         : t
-    );
-    setTasks(updatedTasks);
-
+    ));
     try {
-      // 2. Salva no servidor
       await apiClient.patch(`/tasks/${taskId}/subtasks/${subtaskId}`, { completed: !currentCompleted });
-      
-      // 🆕 3. Salva no cache local para o sync em background não sobrescrever
-      await storage.setItem('tasks_cache', updatedTasks);
     } catch {
-      // Reverte se der erro
-      setTasks(tasks);
+      setTasks(tasks.map(t => 
+        t.id === taskId 
+          ? { ...t, subtasks: t.subtasks?.map(s => s.id === subtaskId ? { ...s, completed: currentCompleted } : s) }
+          : t
+      ));
       Alert.alert('Erro', 'Não foi possível atualizar a subtarefa.');
     }
   };
 
-  // --- Funções de Edição Rápida (Tarefa Principal) ---
   const openEditModal = (task: Task, field: 'priority' | 'status' | 'date' | 'category') => {
     setEditingTask({ task, field });
-    
     if (field === 'date') {
       if (task.due_date) {
         const d = new Date(task.due_date);
@@ -144,7 +135,6 @@ export default function TasksScreen() {
         setSelectedTime('12:00');
       }
     }
-    
     if (field === 'category') {
       setTempCategoryIds(task.categories?.map(c => c.category.id) || []);
     }
@@ -198,7 +188,6 @@ export default function TasksScreen() {
     }
   };
 
-  // --- Funções de Edição de Data da SUBTAREFA ---
   const openSubtaskDateModal = (taskId: string, sub: Subtask) => {
     setSubtaskDateEdit({ taskId, subtask: sub });
     if (sub.due_date) {
@@ -221,13 +210,11 @@ export default function TasksScreen() {
       const localDate = new Date(year, month - 1, day, hours || 0, minutes || 0);
       const isoDate = localDate.toISOString();
 
-      const updatedTasks = tasks.map(t => 
+      setTasks(tasks.map(t => 
         t.id === subtaskDateEdit.taskId 
           ? { ...t, subtasks: t.subtasks?.map(s => s.id === subtaskDateEdit.subtask.id ? { ...s, due_date: isoDate } : s) }
           : t
-      );
-      setTasks(updatedTasks);
-      await storage.setItem('tasks_cache', updatedTasks);
+      ));
 
       await apiClient.patch(`/tasks/${subtaskDateEdit.taskId}/subtasks/${subtaskDateEdit.subtask.id}`, { due_date: isoDate });
       setSubtaskDateEdit(null);
@@ -242,13 +229,11 @@ export default function TasksScreen() {
     if (!subtaskDateEdit) return;
     setSavingSubDate(true);
     
-    const updatedTasks = tasks.map(t => 
+    setTasks(tasks.map(t => 
       t.id === subtaskDateEdit.taskId 
         ? { ...t, subtasks: t.subtasks?.map(s => s.id === subtaskDateEdit.subtask.id ? { ...s, due_date: null } : s) }
         : t
-    );
-    setTasks(updatedTasks);
-    await storage.setItem('tasks_cache', updatedTasks);
+    ));
 
     try {
       await apiClient.patch(`/tasks/${subtaskDateEdit.taskId}/subtasks/${subtaskDateEdit.subtask.id}`, { due_date: null });
@@ -317,7 +302,13 @@ export default function TasksScreen() {
                     <Ionicons name={isExpanded ? "chevron-down" : "chevron-forward"} size={20} color="#6b7280" />
                   </TouchableOpacity>
                   <Text style={[styles.cardTitle, isDone && styles.textLineThrough]} numberOfLines={2}>{item.title}</Text>
+                  
                   {item.recurrence_type && <Ionicons name="repeat" size={14} color="#8b5cf6" style={{ marginLeft: 4 }} />}
+                  
+                  {/* 🆕 Ícone de Anexo na Listagem */}
+                  {item._count && item._count.attachments > 0 && (
+                    <Ionicons name="attach" size={16} color="#6b7280" style={{ marginLeft: 4 }} />
+                  )}
                 </View>
                 
                 <View style={styles.cardActions}>
@@ -389,10 +380,7 @@ export default function TasksScreen() {
                     const isOverdue = sub.due_date && !sub.completed && new Date(sub.due_date) < new Date();
                     return (
                       <View key={sub.id} style={styles.subtaskItem}>
-                        <TouchableOpacity 
-                          onPress={() => handleToggleSubtask(item.id, sub.id, sub.completed)} 
-                          style={{ padding: 4, paddingRight: 8 }}
-                        >
+                        <TouchableOpacity onPress={() => handleToggleSubtask(item.id, sub.id, sub.completed)} style={{ padding: 4, paddingRight: 8 }}>
                           <View style={[
                             styles.customCheckbox,
                             sub.completed ? { backgroundColor: '#22c55e', borderColor: '#22c55e' } : { borderColor: '#d1d5db' }
@@ -400,7 +388,6 @@ export default function TasksScreen() {
                             {sub.completed && <Ionicons name="checkmark" size={16} color="#fff" />}
                           </View>
                         </TouchableOpacity>
-
                         <View style={{ flex: 1 }}>
                           <TouchableOpacity onPress={() => handleToggleSubtask(item.id, sub.id, sub.completed)}>
                             <Text style={[styles.subtaskText, sub.completed && styles.textLineThrough]}>{sub.title}</Text>
@@ -430,7 +417,6 @@ export default function TasksScreen() {
         <Ionicons name="add" size={28} color="#fff" />
       </TouchableOpacity>
 
-      {/* MODAL DE EXCLUSÃO DE TAREFA */}
       <CustomModal visible={!!taskToDelete} onRequestClose={() => setTaskToDelete(null)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -444,7 +430,6 @@ export default function TasksScreen() {
         </View>
       </CustomModal>
 
-      {/* MODAL DE EDIÇÃO RÁPIDA */}
       <CustomModal visible={!!editingTask} onRequestClose={() => setEditingTask(null)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -527,7 +512,6 @@ export default function TasksScreen() {
         </View>
       </CustomModal>
 
-      {/* MODAL DE DATA DA SUBTAREFA */}
       <CustomModal visible={!!subtaskDateEdit} onRequestClose={() => setSubtaskDateEdit(null)}>
         <View style={styles.modalOverlayCalendar}>
           <View style={styles.modalContentCalendar}>

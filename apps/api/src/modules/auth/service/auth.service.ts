@@ -177,7 +177,6 @@ export const authService = {
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
 
-    await authRepository.deleteAllRefreshTokens(user.id);
     await authRepository.createRefreshToken(user.id, refreshToken, expiresAt);
 
     return {

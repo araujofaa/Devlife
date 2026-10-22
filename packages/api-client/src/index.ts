@@ -37,7 +37,6 @@ class ApiClient {
         const refreshToken = this.tokenAdapter?.getRefreshToken
           ? await this.tokenAdapter.getRefreshToken()
           : null;
-
         const body = refreshToken ? { refreshToken } : {};
 
         const refreshResponse = await fetch(`${this.baseURL}/auth/refresh`, {
@@ -54,17 +53,11 @@ class ApiClient {
             const payload = await refreshResponse.json();
             const newAccess = payload?.data?.accessToken;
             const newRefresh = payload?.data?.refreshToken;
-            if (newAccess) {
-              await this.tokenAdapter.setTokens(newAccess, newRefresh);
-            }
-          } catch {
-            /* web: cookie já foi setado via Set-Cookie */
-          }
+            if (newAccess) await this.tokenAdapter.setTokens(newAccess, newRefresh);
+          } catch { /* web */ }
         }
-
         return true;
       } catch (err) {
-        console.error('[apiClient] Erro no refresh:', err);
         await this.tokenAdapter?.clear?.();
         return false;
       } finally {
@@ -75,19 +68,13 @@ class ApiClient {
     return this.refreshing;
   }
 
-  private async request<T = any>(
-    endpoint: string,
-    options: RequestOptions = {},
-  ): Promise<ApiResponse<T>> {
+  private async request<T = any>(endpoint: string, options: RequestOptions = {}): Promise<ApiResponse<T>> {
     const url = `${this.baseURL}${endpoint}`;
     const headers: Record<string, string> = { ...options.headers };
+    const isFormData = options.body instanceof FormData;
 
-    if (
-      options.body &&
-      (options.method === 'POST' ||
-        options.method === 'PUT' ||
-        options.method === 'PATCH')
-    ) {
+    // Não define Content-Type se for FormData (o fetch define automaticamente com o boundary)
+    if (options.body && !isFormData && (options.method === 'POST' || options.method === 'PUT' || options.method === 'PATCH')) {
       headers['Content-Type'] = 'application/json';
     }
 
@@ -99,7 +86,7 @@ class ApiClient {
     const config: RequestInit = {
       method: options.method || 'GET',
       headers,
-      body: options.body ? JSON.stringify(options.body) : undefined,
+      body: isFormData ? options.body : (options.body ? JSON.stringify(options.body) : undefined),
       credentials: 'include',
     };
 
@@ -107,9 +94,7 @@ class ApiClient {
 
     if (response.status === 401 && !options._retry) {
       const refreshed = await this.doRefresh();
-      if (refreshed) {
-        return this.request<T>(endpoint, { ...options, _retry: true });
-      }
+      if (refreshed) return this.request<T>(endpoint, { ...options, _retry: true });
       await this.tokenAdapter?.clear?.();
     }
 
@@ -123,14 +108,16 @@ class ApiClient {
   post<T = any>(endpoint: string, body?: any, headers?: Record<string, string>) {
     return this.request<T>(endpoint, { method: 'POST', body, headers });
   }
-  put<T = any>(endpoint: string, body?: any, headers?: Record<string, string>) {
-    return this.request<T>(endpoint, { method: 'PUT', body, headers });
-  }
   patch<T = any>(endpoint: string, body?: any, headers?: Record<string, string>) {
     return this.request<T>(endpoint, { method: 'PATCH', body, headers });
   }
   delete<T = any>(endpoint: string, headers?: Record<string, string>) {
     return this.request<T>(endpoint, { method: 'DELETE', headers });
+  }
+
+  // 🆕 Método específico para envio de arquivos (FormData)
+  postForm<T = any>(endpoint: string, formData: FormData) {
+    return this.request<T>(endpoint, { method: 'POST', body: formData });
   }
 }
 
