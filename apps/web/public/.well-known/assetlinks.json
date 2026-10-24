@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.alvesexpo.devlife",
+      "sha256_cert_fingerprints": [
+        "ED:DC:C8:B0:02:2F:82:C8:18:F2:8C:D3:AD:72:E3:57:A0:60:C2:0A:34:1F:A4:5B:BE:99:2F:EA:C6:B6:90:EA"
+      ]
+    }
+  }
+]

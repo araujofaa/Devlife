@@ -46,40 +46,64 @@ export function AttachmentManager({ taskId, noteId }: Props) {
     if (taskId || noteId) fetchAttachments();
   }, [taskId, noteId]);
 
-  const uploadFile = async (uri: string, name: string, mimeType: string) => {
+    const uploadFile = async (uri: string, name: string, mimeType: string) => {
     setUploading(true);
     try {
-      const formData = new FormData();
+      const token = await storage.getToken('access_token');
+      const url = `${process.env.EXPO_PUBLIC_API_URL}/attachments`;
 
-      // Adaptação para Web vs Mobile
       if (Platform.OS === 'web') {
+        // Lógica da Web (continua igual)
+        const formData = new FormData();
         const response = await fetch(uri);
         const blob = await response.blob();
         formData.append('file', blob, name);
-      } else {
-        formData.append('file', { uri, name, type: mimeType } as any);
+        if (taskId) formData.append('taskId', taskId);
+        if (noteId) formData.append('noteId', noteId);
+
+        const res = await apiClient.postForm<Attachment>('/attachments', formData);
+        if (res.success && res.data) setAttachments([res.data, ...attachments]);
+        else Alert.alert('Erro', res.error?.message || 'Falha ao enviar arquivo');
+        
+        return;
       }
 
-      if (taskId) formData.append('taskId', taskId);
-      if (noteId) formData.append('noteId', noteId);
+      // 🆕 Lógica Nativa (Mobile) usando FileSystem.uploadAsync
+      const options = {
+        httpMethod: 'POST' as const,
+        uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+        fieldName: 'file',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        parameters: {
+          ...(taskId && { taskId }),
+          ...(noteId && { noteId }),
+        },
+      };
 
-      const res = await apiClient.postForm<Attachment>('/attachments', formData);
-      
-      if (res.success && res.data) {
-        setAttachments([res.data, ...attachments]);
+      const uploadResult = await FileSystem.uploadAsync(url, uri, options);
+
+      if (uploadResult.status === 201) {
+        const parsedData = JSON.parse(uploadResult.body);
+        if (parsedData.success && parsedData.data) {
+          setAttachments([parsedData.data, ...attachments]);
+        }
       } else {
-        Alert.alert('Erro', res.error?.message || 'Falha ao enviar arquivo');
+        Alert.alert('Erro', 'Falha ao enviar arquivo para o servidor.');
+        console.error('Erro no upload:', uploadResult);
       }
     } catch (err) {
+      console.error('Erro no upload:', err);
       Alert.alert('Erro', 'Erro de conexão ao enviar arquivo');
     } finally {
       setUploading(false);
     }
   };
 
-  const pickImage = async () => {
+    const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'], // 🆕 Nova sintaxe exigida pelo Expo
       quality: 0.8,
     });
     if (!result.canceled) {
