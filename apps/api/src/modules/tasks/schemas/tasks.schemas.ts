@@ -5,6 +5,7 @@ export const taskCreateSchema = z.object({
   description: z.string().optional(),
   priority: z.enum(['low', 'medium', 'high']).default('medium'),
   status: z.enum(['pending', 'done']).default('pending'),
+  start_date: z.string().datetime().nullable().optional(), // 🆕
   due_date: z.string().datetime().nullable().optional(),
   categoryIds: z.array(z.string()).optional(),
   recurrence_type: z
@@ -53,6 +54,7 @@ export type SubtaskUpdateInput = z.infer<typeof subtaskUpdateSchema>;
 export const importSubtaskSchema = z.object({
   title: z.string().min(1),
   completed: z.boolean().default(false),
+  start_date: z.string().datetime().nullable().optional(), // 🆕
   due_date: z.string().datetime().nullable().optional(),
   order: z.number().int().optional(),
 });
@@ -62,6 +64,7 @@ export const importTaskSchema = z.object({
   description: z.string().nullable().optional(),
   priority: z.enum(['low', 'medium', 'high']).default('medium'),
   status: z.enum(['pending', 'done']).default('pending'),
+  start_date: z.string().datetime().nullable().optional(), // 🆕
   due_date: z.string().datetime().nullable().optional(),
   recurrence_type: z
     .enum(['daily', 'weekly', 'monthly', 'yearly'])

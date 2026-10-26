@@ -33,6 +33,7 @@ export const syncService = {
                 description: data.description ?? null,
                 priority: data.priority ?? 'medium',
                 status: data.status ?? 'pending',
+                start_date: data.start_date ? new Date(data.start_date) : null, // 🆕
                 due_date: data.due_date ? new Date(data.due_date) : null,
                 recurrence_type: data.recurrence_type || null,
                 recurrence_interval: data.recurrence_interval || 1,
@@ -63,6 +64,7 @@ export const syncService = {
                   description: data.description ?? null,
                   priority: data.priority ?? 'medium',
                   status: data.status ?? 'pending',
+                  start_date: data.start_date ? new Date(data.start_date) : null, // 🆕
                   due_date: data.due_date ? new Date(data.due_date) : null,
                   recurrence_type: data.recurrence_type || null,
                   recurrence_interval: data.recurrence_interval || 1,
@@ -174,7 +176,7 @@ export const syncService = {
       include: {
         subtasks: true,
         categories: { include: { category: true } },
-        _count: { select: { attachments: true } }, // 🆕 Contagem para o mobile
+        _count: { select: { attachments: true } },
       },
     });
     serverChanges.push(...tasks.map((t: any) => ({ ...t, entity: 'task' })));
@@ -186,7 +188,7 @@ export const syncService = {
       },
       include: {
         categories: { include: { category: true } },
-        _count: { select: { attachments: true } }, // 🆕 Contagem para o mobile
+        _count: { select: { attachments: true } },
       },
     });
     serverChanges.push(...notes.map((n: any) => ({ ...n, entity: 'note' })));

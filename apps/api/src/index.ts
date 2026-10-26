@@ -1,4 +1,6 @@
 import 'dotenv/config'; // 🆕 Carrega o .env na inicialização
+import dns from 'node:dns';
+dns.setDefaultResultOrder('ipv4first'); // 🆕 Força o uso de IPv4
 import cron from 'node-cron';
 import { buildApp } from './app';
 import { checkUpcomingTasks } from './services/reminder.service';

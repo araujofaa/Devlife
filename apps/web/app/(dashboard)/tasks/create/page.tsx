@@ -15,6 +15,7 @@ export default function CreateTaskPage() {
     description: '',
     priority: 'medium',
     status: 'pending',
+    start_date: '', // 🆕
     due_date: '',
   });
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
@@ -41,6 +42,7 @@ export default function CreateTaskPage() {
     try {
       const payload = {
         ...form,
+        start_date: form.start_date ? new Date(form.start_date).toISOString() : null, // 🆕
         due_date: form.due_date ? new Date(form.due_date).toISOString() : undefined,
         categoryIds,
         recurrence_type: recurrence.type,
@@ -125,18 +127,32 @@ export default function CreateTaskPage() {
           </select>
         </div>
 
-        {/* Data de vencimento */}
-        <div>
-          <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
-            Data de Vencimento
-          </label>
-          <input
-            type="datetime-local"
-            name="due_date"
-            value={form.due_date}
-            onChange={handleChange}
-            className="w-full border px-3 py-2 rounded dark:bg-gray-800 dark:border-gray-700 dark:text-white"
-          />
+        {/* 🆕 Datas de Início e Vencimento lado a lado */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+              Data de Início
+            </label>
+            <input
+              type="datetime-local"
+              name="start_date"
+              value={form.start_date}
+              onChange={handleChange}
+              className="w-full border px-3 py-2 rounded dark:bg-gray-800 dark:border-gray-700 dark:text-white"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
+              Data de Vencimento
+            </label>
+            <input
+              type="datetime-local"
+              name="due_date"
+              value={form.due_date}
+              onChange={handleChange}
+              className="w-full border px-3 py-2 rounded dark:bg-gray-800 dark:border-gray-700 dark:text-white"
+            />
+          </div>
         </div>
 
         {/* Categorias */}
@@ -147,7 +163,7 @@ export default function CreateTaskPage() {
           <CategorySelector selectedIds={categoryIds} onChange={setCategoryIds} />
         </div>
 
-        {/* 🆕 Recorrência - ADICIONE AQUI! */}
+        {/* Recorrência */}
         <div>
           <RecurrenceSelector value={recurrence} onChange={setRecurrence} />
         </div>

@@ -83,6 +83,7 @@ model Task {
   description String?   @db.Text
   priority    String    @default("medium")
   status      String    @default("pending")
+  start_date  DateTime? // 🆕 Adicione esta linha
   due_date    DateTime?
   created_at  DateTime  @default(now())
   updated_at  DateTime  @updatedAt

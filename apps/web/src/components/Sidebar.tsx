@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import Link from 'next/link';
+import NextLink from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   HomeIcon,
@@ -9,7 +9,7 @@ import {
   DocumentTextIcon,
   UserIcon,
   Cog6ToothIcon,
-  ArrowRightOnRectangleIcon,
+  ArrowLeftStartOnRectangleIcon,
   TagIcon,
   DocumentChartBarIcon,
   CalendarDaysIcon,
@@ -18,6 +18,10 @@ import { HomeIcon as HomeSolid } from '@heroicons/react/24/solid';
 import ThemeToggle from './ThemeToggle';
 import { useAuth } from '@/hooks/useAuth';
 import { DevicePhoneMobileIcon } from '@heroicons/react/24/outline';
+
+// Reconcile Next.js Link's React types with the React types used by this file.
+const Link = NextLink as unknown as React.ComponentType<any>;
+const LogoutIcon = ArrowLeftStartOnRectangleIcon as unknown as React.ComponentType<React.SVGProps<SVGSVGElement>>;
 
 const navItems = [
   { name: 'Dashboard', href: '/dashboard', icon: HomeIcon, activeIcon: HomeSolid },
@@ -57,7 +61,7 @@ const Sidebar: React.FC = () => {
       <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
         {navItems.map((item) => {
           const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
-          const Icon = isActive && item.activeIcon ? item.activeIcon : item.icon;
+          const Icon = (isActive && item.activeIcon ? item.activeIcon : item.icon) as React.ComponentType<React.SVGProps<SVGSVGElement>>;
           return (
             <Link
               key={item.href}
@@ -85,7 +89,7 @@ const Sidebar: React.FC = () => {
           onClick={logout}
           className="flex items-center gap-3 w-full px-4 py-2.5 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
         >
-          <ArrowRightOnRectangleIcon className="w-5 h-5" />
+          <LogoutIcon className="w-5 h-5" />
           <span>Sair</span>
         </button>
       </div>
