@@ -18,11 +18,5 @@
     "prettier": "^3.0.0",
     "turbo": "^1.13.2"
   },
-  "packageManager": "pnpm@12.14.0",
-  "pnpm": {
-    "overrides": {
-      "@types/react": "18.2.79",
-      "@types/react-dom": "18.2.25"
-    }
-  }
+  "packageManager": "pnpm@12.15.0"
 }
