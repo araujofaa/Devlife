@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { apiClient } from '@devlife/api-client';
+import { useQuery } from '@tanstack/react-query';
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -12,6 +13,8 @@ import {
   ViewColumnsIcon,
   Squares2X2Icon,
   ArrowPathIcon,
+  ClockIcon,
+  PencilIcon,
 } from '@heroicons/react/24/outline';
 import toast from 'react-hot-toast';
 import {
@@ -19,6 +22,7 @@ import {
   getApiDayKey,
   formatApiTime,
   getApiHourMinute,
+  formatApiDateTime,
 } from '@/lib/datetime';
 
 interface Category {
@@ -53,9 +57,9 @@ const MONTHS = [
 ];
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
-const BASE_HOUR_HEIGHT = 60; // Altura base para uma hora sem tarefas
+const BASE_HOUR_HEIGHT = 60;
 
-function getStartOfWeek(date: Date): Date {
+function getStartOfWeek(date: Date | string | number): Date {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
   d.setDate(d.getDate() - d.getDay());
@@ -77,7 +81,8 @@ function CalendarContent() {
   const today = new Date();
   const initialYear = parseInt(searchParams.get('year') || String(today.getFullYear()));
   const initialMonth = parseInt(searchParams.get('month') || String(today.getMonth()));
-  const initialView = (searchParams.get('view') as 'month' | 'week') || 'month';
+  const requestedView = searchParams.get('view');
+  const initialView = requestedView === 'week' ? 'week' : 'month';
   const initialWeekDate = searchParams.get('week_date');
 
   const [view, setView] = useState<'month' | 'week'>(initialView);
@@ -88,9 +93,11 @@ function CalendarContent() {
       ? getStartOfWeek(new Date(initialWeekDate + 'T00:00:00'))
       : getStartOfWeek(today)
   );
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(true);
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
+
+  // 🆕 Estado para controlar o Popover de hover
+  const [hoveredItem, setHoveredItem] = useState<{ item: any; rect: DOMRect } | null>(null);
+  const [hoverTimeout, setHoverTimeout] = useState<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -129,9 +136,9 @@ function CalendarContent() {
     }
   }, [view, year, month, weekStart]);
 
-  const fetchTasks = async () => {
-    setLoading(true);
-    try {
+  const { data: tasks = [], isLoading } = useQuery({
+    queryKey: ['calendarTasks', { from: rangeFrom.toISOString(), to: rangeTo.toISOString() }],
+    queryFn: async () => {
       const params = new URLSearchParams({
         limit: '1000',
         due_date_from: rangeFrom.toISOString(),
@@ -139,23 +146,13 @@ function CalendarContent() {
       });
 
       const response = await apiClient.get(`/tasks?${params.toString()}`);
-      if (response.success) {
-        setTasks(response.data.tasks || []);
-      } else {
-        toast.error(response.error?.message || 'Erro ao carregar tarefas');
+      if (!response.success) {
+        throw new Error('Erro ao carregar tarefas');
       }
-    } catch (error) {
-      console.error('[Calendar] Erro:', error);
-      toast.error('Erro ao carregar tarefas');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchTasks();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rangeFrom, rangeTo]);
+      return response.data.tasks as Task[];
+    },
+    placeholderData: (previousData) => previousData,
+  });
 
   const monthGrid = useMemo(() => {
     const firstDay = new Date(year, month, 1);
@@ -204,7 +201,7 @@ function CalendarContent() {
   }, [weekStart]);
 
   const weeksWithTasks = useMemo(() => {
-    const weeks = [];
+    const weeks: any[] = [];
     
     for (let i = 0; i < 42; i += 7) {
       const week = monthGrid.slice(i, i + 7);
@@ -255,7 +252,11 @@ function CalendarContent() {
               actualEnd,
               isSingleDay,
               due_date: task.due_date,
+              start_date: task.start_date,
               recurrence_type: task.recurrence_type,
+              categories: task.categories,
+              parentTitle: null,
+              isSubtask: false,
             });
           }
         } else if (dueRaw) {
@@ -276,7 +277,11 @@ function CalendarContent() {
                 actualEnd: true,
                 isSingleDay: true,
                 due_date: task.due_date,
+                start_date: task.start_date,
                 recurrence_type: task.recurrence_type,
+                categories: task.categories,
+                parentTitle: null,
+                isSubtask: false,
               });
             }
           }
@@ -301,6 +306,11 @@ function CalendarContent() {
                   actualEnd: true,
                   isSingleDay: true,
                   due_date: sub.due_date,
+                  start_date: null,
+                  recurrence_type: null,
+                  categories: task.categories,
+                  parentTitle: task.title,
+                  isSubtask: true,
                 });
               }
             }
@@ -344,8 +354,14 @@ function CalendarContent() {
     const map = new Map<string, any[]>();
 
     const addItem = (key: string, item: any) => {
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(item);
+      const existingItems = map.get(key);
+
+      if (existingItems) {
+        existingItems.push(item);
+        return;
+      }
+
+      map.set(key, [item]);
     };
 
     weekDays.forEach(day => {
@@ -379,7 +395,8 @@ function CalendarContent() {
               display_date: displayDate,
               isMultiDay,
               isStart,
-              isEnd
+              isEnd,
+              parentTitle: null,
             });
           }
         } else if (dueRaw) {
@@ -391,7 +408,8 @@ function CalendarContent() {
               display_date: task.due_date,
               isMultiDay: false,
               isStart: true,
-              isEnd: true
+              isEnd: true,
+              parentTitle: null,
             });
           }
         } else if (startRaw) {
@@ -403,7 +421,8 @@ function CalendarContent() {
               display_date: task.start_date,
               isMultiDay: false,
               isStart: true,
-              isEnd: true
+              isEnd: true,
+              parentTitle: null,
             });
           }
         }
@@ -424,7 +443,10 @@ function CalendarContent() {
                 display_date: sub.due_date,
                 isMultiDay: false,
                 isStart: true,
-                isEnd: true
+                isEnd: true,
+                categories: task.categories,
+                recurrence_type: null,
+                start_date: null,
               });
             }
           }
@@ -433,7 +455,7 @@ function CalendarContent() {
     });
 
     map.forEach((items, key) => {
-      items.sort((a, b) => {
+      items.sort((a: any, b: any) => {
         let startMinA = 0;
         let startMinB = 0;
         try {
@@ -460,7 +482,7 @@ function CalendarContent() {
         const dayKey = getApiDayKey(day.toISOString());
         const dayItems = weekItemsByDay.get(dayKey) || [];
         
-        const hourItems = dayItems.filter(item => {
+        const hourItems = dayItems.filter((item: any) => {
           let { hour } = getApiHourMinute(item.display_date);
           if (isNaN(hour)) hour = 0;
           return hour === h;
@@ -577,6 +599,20 @@ function CalendarContent() {
     return `${weekStart.getDate()} ${MONTHS[weekStart.getMonth()].substring(0, 3)} - ${end.getDate()} ${MONTHS[end.getMonth()].substring(0, 3)}`;
   }, [view, year, month, weekStart]);
 
+  // 🆕 Funções para controlar o Hover
+  const handleMouseEnter = (e: React.MouseEvent, item: any) => {
+    if (hoverTimeout) clearTimeout(hoverTimeout);
+    const rect = e.currentTarget.getBoundingClientRect();
+    setHoveredItem({ item, rect });
+  };
+
+  const handleMouseLeave = () => {
+    const timeout = setTimeout(() => {
+      setHoveredItem(null);
+    }, 150);
+    setHoverTimeout(timeout);
+  };
+
   // ============================================
   // RENDER: VIEW MÊS
   // ============================================
@@ -590,7 +626,7 @@ function CalendarContent() {
         ))}
       </div>
 
-      {loading ? (
+      {isLoading && tasks.length === 0 ? (
         <div className="p-12 flex justify-center"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600" /></div>
       ) : (
         <div className="flex flex-col">
@@ -601,7 +637,7 @@ function CalendarContent() {
               style={{ minHeight: `${Math.max(120, 36 + maxLane * 28)}px` }}
             >
               <div className="absolute inset-0 grid grid-cols-7">
-                {week.map((cell) => {
+                {week.map((cell: { date: Date; isCurrentMonth: boolean; key: string }) => {
                   const isSelected = selectedDay && isSameDay(cell.date, selectedDay);
                   return (
                     <div
@@ -624,7 +660,7 @@ function CalendarContent() {
               </div>
 
               <div className="relative grid grid-cols-7 pointer-events-none z-10 pt-1.5 h-8">
-                {week.map((cell) => {
+                {week.map((cell: { date: Date; isCurrentMonth: boolean; key: string }) => {
                   const todayCell = isSameDay(cell.date, new Date());
                   return (
                     <div key={cell.key} className="px-1.5 flex justify-between items-start">
@@ -637,7 +673,7 @@ function CalendarContent() {
               </div>
 
               <div className="relative z-20 w-full flex-1 pointer-events-none">
-                {items.map((item) => {
+                {items.map((item: any) => {
                   let bgClass = 'bg-yellow-400 text-yellow-900';
                   if (item.status === 'done') bgClass = 'bg-gray-200 text-gray-500 line-through dark:bg-gray-700 dark:text-gray-500';
                   else if (item.priority === 'high') bgClass = 'bg-red-500 text-white';
@@ -662,6 +698,8 @@ function CalendarContent() {
                   const justifyClass = isMultiDay ? 'justify-center' : 'justify-start';
                   const textClass = isMultiDay ? 'text-center' : 'text-left';
                   const showTitle = item.actualStart || item.isSingleDay || item.colStart === 0;
+                  
+                  const href = `/tasks/${item.taskId}/edit${item.type === 'subtask' ? `?subtask=${item.id}` : ''}`;
 
                   return (
                     <div
@@ -673,11 +711,13 @@ function CalendarContent() {
                         top: `${item.lane * 26}px`,
                         height: '22px',
                       }}
+                      onMouseEnter={(e) => handleMouseEnter(e, item)}
+                      onMouseLeave={handleMouseLeave}
                     >
                       <Link
-                        href={`/tasks/${item.taskId}/edit`}
+                        href={href}
                         className={`flex items-center w-full h-full px-1.5 text-[11px] leading-tight transition hover:brightness-110 overflow-hidden ${bgClass} ${radiusClass} ${justifyClass}`}
-                        title={item.title}
+                        // 🆕 Título removido daqui
                       >
                         <div className="flex items-center w-full min-w-0">
                           {showTitle && item.type === 'task' && item.recurrence_type && (
@@ -708,14 +748,13 @@ function CalendarContent() {
   );
 
   // ============================================
-  // RENDER: VIEW SEMANA (Agenda de Horários Empilhados Verticalmente)
+  // RENDER: VIEW SEMANA
   // ============================================
   const renderWeekView = () => {
     const now = new Date();
 
     return (
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow border border-gray-200 dark:border-gray-700 overflow-hidden">
-        {/* Header com os dias */}
         <div className="grid grid-cols-[60px_repeat(7,1fr)] border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 sticky top-0 z-30">
           <div></div>
           {weekDays.map((day) => {
@@ -744,24 +783,21 @@ function CalendarContent() {
           })}
         </div>
 
-        {/* Grid das horas com scroll */}
         <div className="overflow-y-auto" style={{ maxHeight: 'calc(100vh - 320px)' }}>
           <div className="flex flex-col">
             {HOURS.map(h => {
               const height = hourHeights[h];
               return (
                 <div key={h} className="grid grid-cols-[60px_repeat(7,1fr)] relative" style={{ height }}>
-                  {/* Coluna de Horas */}
                   <div className="text-right pr-2 text-[10px] text-gray-400 dark:text-gray-500 pt-1 font-medium">
                     {h.toString().padStart(2, '0')}:00
                   </div>
 
-                  {/* Colunas dos dias */}
                   {weekDays.map(day => {
                     const dayKey = getApiDayKey(day.toISOString());
                     const dayItems = weekItemsByDay.get(dayKey) || [];
                     
-                    const hourItems = dayItems.filter(item => {
+                    const hourItems = dayItems.filter((item: any) => {
                       let { hour } = getApiHourMinute(item.display_date);
                       if (isNaN(hour)) hour = 0;
                       return hour === h;
@@ -777,7 +813,7 @@ function CalendarContent() {
                           todayCell ? 'bg-blue-50/30 dark:bg-blue-900/10' : ''
                         }`}
                       >
-                        {hourItems.map((item, idx) => {
+                        {hourItems.map((item: any, idx: number) => {
                           const { minute } = getApiHourMinute(item.display_date);
                           
                           const isFirst = idx === 0;
@@ -795,32 +831,34 @@ function CalendarContent() {
                           else if (item.priority === 'high') bgClass = 'bg-red-100 border-red-400 text-red-800 dark:bg-red-900/50 dark:border-red-600 dark:text-red-200';
                           else if (item.priority === 'low') bgClass = 'bg-green-100 border-green-400 text-green-800 dark:bg-green-900/50 dark:border-green-600 dark:text-green-200';
 
+                          const href = `/tasks/${item.taskId}/edit${item.isSubtask ? `?subtask=${item.id}` : ''}`;
+
                           return (
-                            <Link
+                            <div
                               key={`${item.id}-${dayKey}-${idx}`}
-                              href={`/tasks/${item.taskId}/edit`}
-                              className={`rounded border-l-4 shadow-sm px-1.5 py-1 transition hover:shadow-md overflow-hidden mx-1 flex flex-col justify-center min-w-0 ${bgClass}`}
-                              style={{
-                                marginTop,
-                                height: '40px',
-                                flexShrink: 0,
-                                width: 'calc(100% - 8px)' // Garante que não vaze para o lado por conta do mx-1
-                              }}
-                              title={`${item.title} — ${timeLabel}${item.parentTitle ? ` (em "${item.parentTitle}")` : ''}`}
+                              style={{ marginTop, flexShrink: 0, width: 'calc(100% - 8px)' }}
+                              className="mx-1"
+                              onMouseEnter={(e) => handleMouseEnter(e, item)}
+                              onMouseLeave={handleMouseLeave}
                             >
-                              <div className="flex items-center gap-1 w-full min-w-0">
-                                {item.isSubtask && <span className="text-[10px] shrink-0">↳</span>}
-                                <div className="flex-1 min-w-0">
-                                  <div className="text-[10px] font-semibold opacity-70 truncate leading-tight">{timeLabel}</div>
-                                  <div className="text-[11px] font-medium truncate leading-tight">{item.title}</div>
+                              <Link
+                                href={href}
+                                className={`rounded border-l-4 shadow-sm px-1.5 py-1 transition hover:shadow-md overflow-hidden flex flex-col justify-center min-w-0 h-[40px] ${bgClass}`}
+                                // 🆕 Título removido daqui também
+                              >
+                                <div className="flex items-center gap-1 w-full min-w-0">
+                                  {item.isSubtask && <span className="text-[10px] shrink-0">↳</span>}
+                                  <div className="flex-1 min-w-0">
+                                    <div className="text-[10px] font-semibold opacity-70 truncate leading-tight">{timeLabel}</div>
+                                    <div className="text-[11px] font-medium truncate leading-tight">{item.title}</div>
+                                  </div>
+                                  {item.status === 'done' && <CheckCircleIcon className="w-3.5 h-3.5 shrink-0" />}
                                 </div>
-                                {item.status === 'done' && <CheckCircleIcon className="w-3.5 h-3.5 shrink-0" />}
-                              </div>
-                            </Link>
+                              </Link>
+                            </div>
                           );
                         })}
 
-                        {/* Linha do "agora" */}
                         {isCurrentHour && (
                           <div 
                             className="absolute left-0 right-0 border-t-2 border-red-500 z-20 pointer-events-none" 
@@ -842,7 +880,7 @@ function CalendarContent() {
   };
 
   // ============================================
-  // RENDER: PAINEL DO DIA SELECIONADO (MÊS)
+  // RENDER: PAINEL DO DIA SELECIONADO
   // ============================================
   const renderSelectedDayPanel = () => {
     if (!selectedDay) return null;
@@ -880,7 +918,7 @@ function CalendarContent() {
           ) : (
             <ul className="space-y-1.5">
               {selectedDayItems.map((item, idx) => {
-                const editHref = `/tasks/${item.isSubtask ? item.taskId : item.id}/edit`;
+                const editHref = `/tasks/${item.isSubtask ? item.taskId : item.id}/edit${item.isSubtask ? `?subtask=${item.id}` : ''}`;
 
                 let dotClass = 'bg-yellow-400';
                 if (item.status === 'done') dotClass = 'bg-gray-400';
@@ -919,9 +957,9 @@ function CalendarContent() {
                       {item.recurrence_type && (
                         <ArrowPathIcon className="w-3.5 h-3.5 text-gray-400 shrink-0" title="Recorrente" />
                       )}
-                      {isMultiDay && (
+                      {isMultiDay && startDate && dueDate && (
                         <span className="text-[10px] uppercase font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-1.5 py-0.5 rounded shrink-0">
-                          {parseApiDate(item.start_date!)!.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} - {parseApiDate(item.due_date!)!.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+                          {startDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} - {dueDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
                         </span>
                       )}
                       {item.due_date && !isMultiDay && (
@@ -981,6 +1019,107 @@ function CalendarContent() {
       {view === 'month' ? renderMonthView() : renderWeekView()}
 
       {view === 'month' && renderSelectedDayPanel()}
+
+      {/* 🆕 POPOVER DE DETALHES (HOVER CARD) */}
+      {hoveredItem && (
+        <div
+          className="fixed z-50 bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 w-72 overflow-hidden animate-in fade-in zoom-in-95 duration-100"
+          style={{
+            top: Math.min(hoveredItem.rect.bottom + 8, window.innerHeight - 280),
+            left: Math.min(hoveredItem.rect.left, window.innerWidth - 300),
+          }}
+          onMouseEnter={() => {
+            if (hoverTimeout) clearTimeout(hoverTimeout);
+          }}
+          onMouseLeave={handleMouseLeave}
+        >
+          {/* Linha colorida no topo baseada na prioridade */}
+          <div className={`h-1.5 w-full ${
+            hoveredItem.item.status === 'done' ? 'bg-gray-400' :
+            hoveredItem.item.priority === 'high' ? 'bg-red-500' :
+            hoveredItem.item.priority === 'low' ? 'bg-green-500' : 'bg-yellow-400'
+          }`} />
+
+          <div className="p-4">
+            <div className="flex items-start justify-between gap-2 mb-2">
+              <h4 className="font-bold text-gray-900 dark:text-white leading-tight">
+                {hoveredItem.item.title}
+              </h4>
+              {hoveredItem.item.recurrence_type && (
+                <ArrowPathIcon className="w-4 h-4 text-gray-400 shrink-0 mt-0.5" title="Tarefa Recorrente" />
+              )}
+            </div>
+
+            {/* Horário */}
+            <div className="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-300 mb-3">
+              <ClockIcon className="w-4 h-4 shrink-0" />
+              <span>
+                {hoveredItem.item.start_date && hoveredItem.item.due_date && hoveredItem.item.start_date !== hoveredItem.item.due_date ? (
+                  <>
+                    {formatApiDateTime(hoveredItem.item.start_date).split(' ')[0]} até {formatApiDateTime(hoveredItem.item.due_date)}
+                  </>
+                ) : hoveredItem.item.due_date ? (
+                  formatApiDateTime(hoveredItem.item.due_date)
+                ) : (
+                  'Sem data definida'
+                )}
+              </span>
+            </div>
+
+            {/* Badges de Status e Prioridade */}
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                hoveredItem.item.status === 'done' 
+                  ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' 
+                  : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
+              }`}>
+                {hoveredItem.item.status === 'done' ? '✅ Concluída' : '⏳ Pendente'}
+              </span>
+              
+              <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                hoveredItem.item.priority === 'high' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
+                hoveredItem.item.priority === 'low' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
+                'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
+              }`}>
+                {hoveredItem.item.priority === 'high' ? '🔴 Alta' : hoveredItem.item.priority === 'low' ? '🟢 Baixa' : '🟡 Média'}
+              </span>
+            </div>
+
+            {/* Subtarefa Info */}
+            {hoveredItem.item.isSubtask && hoveredItem.item.parentTitle && (
+              <div className="text-sm text-gray-600 dark:text-gray-400 mb-3 bg-gray-50 dark:bg-gray-900/50 p-2 rounded-md">
+                <span className="font-semibold">Subtarefa de:</span> {hoveredItem.item.parentTitle}
+              </div>
+            )}
+
+            {/* Categorias */}
+            {hoveredItem.item.categories && hoveredItem.item.categories.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-4">
+                {hoveredItem.item.categories.map((tc: any, i: number) => (
+                  <span 
+                    key={i} 
+                    className="px-2 py-1 rounded-full text-[10px] font-bold text-white uppercase tracking-wider"
+                    style={{ backgroundColor: tc.category.color }}
+                  >
+                    {tc.category.name}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Botões de Ação */}
+            <div className="flex items-center gap-2 mt-2 pt-3 border-t border-gray-100 dark:border-gray-700">
+              <Link
+                href={`/tasks/${hoveredItem.item.taskId}/edit${hoveredItem.item.isSubtask ? `?subtask=${hoveredItem.item.id}` : ''}`}
+                className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-lg text-sm font-medium hover:bg-blue-100 dark:hover:bg-blue-900/50 transition"
+              >
+                <PencilIcon className="w-4 h-4" />
+                Editar
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

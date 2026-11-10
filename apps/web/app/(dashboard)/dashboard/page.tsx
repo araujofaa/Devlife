@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiClient } from '@devlife/api-client';
+import { useQuery } from '@tanstack/react-query'; // 🆕 Importação do React Query
 import { motion } from 'framer-motion';
 import {
   PieChart,
@@ -43,7 +43,6 @@ const cardVariants = {
   visible: { opacity: 1, y: 0 },
 };
 
-// 🆕 Componente de card clicável
 interface StatCardProps {
   href: string;
   label: string;
@@ -92,26 +91,19 @@ function StatCard({
 }
 
 export default function DashboardPage() {
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const response = await apiClient.get('/stats/dashboard');
-        if (response.success) {
-          setStats(response.data);
-        }
-      } catch (error) {
-        console.error('Erro ao carregar estatísticas', error);
-      } finally {
-        setLoading(false);
+  // 🆕 Substituição do useEffect/useState pelo useQuery
+  const { data: stats, isLoading } = useQuery({
+    queryKey: ['dashboardStats'],
+    queryFn: async () => {
+      const response = await apiClient.get('/stats/dashboard');
+      if (!response.success) {
+        throw new Error('Falha ao carregar estatísticas');
       }
-    };
-    fetchStats();
-  }, []);
+      return response.data as DashboardStats;
+    },
+  });
 
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="flex justify-center items-center h-64">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" />

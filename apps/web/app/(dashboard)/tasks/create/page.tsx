@@ -4,18 +4,21 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { apiClient } from '@devlife/api-client';
+import { useMutation, useQueryClient } from '@tanstack/react-query'; // 🆕 Importação do React Query
 import CategorySelector from '@/components/CategorySelector';
 import RecurrenceSelector from '@/components/RecurrenceSelector';
 import toast from 'react-hot-toast';
 
 export default function CreateTaskPage() {
   const router = useRouter();
+  const queryClient = useQueryClient(); // 🆕 Hook do React Query
+
   const [form, setForm] = useState({
     title: '',
     description: '',
     priority: 'medium',
     status: 'pending',
-    start_date: '', // 🆕
+    start_date: '',
     due_date: '',
   });
   const [categoryIds, setCategoryIds] = useState<string[]>([]);
@@ -24,8 +27,32 @@ export default function CreateTaskPage() {
     interval: 1,
     endDate: '',
   });
-  const [loading, setLoading] = useState(false);
+  
   const [error, setError] = useState('');
+
+  // 🆕 Mutação para criar a tarefa
+  const createTaskMutation = useMutation({
+    mutationFn: async (payload: any) => {
+      const response = await apiClient.post('/tasks', payload);
+      if (!response.success) {
+        throw new Error(response.error?.message || 'Erro ao criar tarefa');
+      }
+      return response.data;
+    },
+    onSuccess: () => {
+      // 🆕 Invalida todos os caches relacionados para atualizar a tela instantaneamente
+      queryClient.invalidateQueries({ queryKey: ['tasks'] }); // Lista principal de tarefas e filtros
+      queryClient.invalidateQueries({ queryKey: ['tasks', 'counts'] }); // Contadores das abas
+      queryClient.invalidateQueries({ queryKey: ['calendarTasks'] }); // Calendário
+      queryClient.invalidateQueries({ queryKey: ['dashboardStats'] }); // Gráficos do Dashboard
+      
+      toast.success('Tarefa criada!');
+      router.push('/tasks');
+    },
+    onError: (err: Error) => {
+      setError(err.message);
+    }
+  });
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
@@ -34,36 +61,24 @@ export default function CreateTaskPage() {
     setForm((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
     setError('');
 
-    try {
-      const payload = {
-        ...form,
-        start_date: form.start_date ? new Date(form.start_date).toISOString() : null, // 🆕
-        due_date: form.due_date ? new Date(form.due_date).toISOString() : undefined,
-        categoryIds,
-        recurrence_type: recurrence.type,
-        recurrence_interval: recurrence.interval,
-        recurrence_end_date: recurrence.endDate
-          ? new Date(recurrence.endDate).toISOString()
-          : null,
-      };
+    const payload = {
+      ...form,
+      start_date: form.start_date ? new Date(form.start_date).toISOString() : null,
+      due_date: form.due_date ? new Date(form.due_date).toISOString() : undefined,
+      categoryIds,
+      recurrence_type: recurrence.type,
+      recurrence_interval: recurrence.interval,
+      recurrence_end_date: recurrence.endDate
+        ? new Date(recurrence.endDate).toISOString()
+        : null,
+    };
 
-      const response = await apiClient.post('/tasks', payload);
-      if (response.success) {
-        toast.success('Tarefa criada!');
-        router.push('/tasks');
-      } else {
-        setError(response.error?.message || 'Erro ao criar tarefa');
-      }
-    } catch {
-      setError('Erro de conexão');
-    } finally {
-      setLoading(false);
-    }
+    // 🆕 Dispara a mutação
+    createTaskMutation.mutate(payload);
   };
 
   return (
@@ -127,7 +142,7 @@ export default function CreateTaskPage() {
           </select>
         </div>
 
-        {/* 🆕 Datas de Início e Vencimento lado a lado */}
+        {/* Datas de Início e Vencimento */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">
@@ -172,10 +187,10 @@ export default function CreateTaskPage() {
         <div className="flex gap-4 pt-4">
           <button
             type="submit"
-            disabled={loading}
+            disabled={createTaskMutation.isPending} // 🆕 Usa o estado da mutação
             className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
           >
-            {loading ? 'Criando...' : 'Criar Tarefa'}
+            {createTaskMutation.isPending ? 'Criando...' : 'Criar Tarefa'}
           </button>
           <Link
             href="/tasks"

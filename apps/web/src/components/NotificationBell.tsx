@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { apiClient } from '@devlife/api-client';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { BellIcon } from '@heroicons/react/24/outline';
 
 interface Notification {
@@ -13,31 +14,22 @@ interface Notification {
 }
 
 export default function NotificationBell() {
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [unreadCount, setUnreadCount] = useState(0);
   const [showDropdown, setShowDropdown] = useState(false);
-  const [loading, setLoading] = useState(true);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const queryClient = useQueryClient();
 
-  const fetchNotifications = async () => {
-    try {
+  // 🆕 Busca e atualiza a cada 30s (Polling)
+  const { data, isLoading } = useQuery({
+    queryKey: ['notifications'],
+    queryFn: async () => {
       const response = await apiClient.get('/notifications');
-      if (response.success) {
-        setNotifications(response.data.notifications);
-        setUnreadCount(response.data.unread);
-      }
-    } catch (error) {
-      console.error('Erro ao buscar notificações', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+      return response.success ? response.data : { notifications: [], unread: 0 };
+    },
+    refetchInterval: 30000, // Atualiza a cada 30 segundos
+  });
 
-  useEffect(() => {
-    fetchNotifications();
-    const interval = setInterval(fetchNotifications, 30000);
-    return () => clearInterval(interval);
-  }, []);
+  const notifications: Notification[] = data?.notifications || [];
+  const unreadCount = data?.unread || 0;
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -49,23 +41,16 @@ export default function NotificationBell() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handleMarkAsRead = async (id: string) => {
-    try {
-      await apiClient.patch(`/notifications/${id}/read`);
-      await fetchNotifications();
-    } catch (error) {
-      console.error('Erro ao marcar como lida', error);
-    }
-  };
+  // 🆕 Mutações com React Query
+  const markAsReadMutation = useMutation({
+    mutationFn: (id: string) => apiClient.patch(`/notifications/${id}/read`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
+  });
 
-  const handleMarkAllAsRead = async () => {
-    try {
-      await apiClient.patch('/notifications/read-all');
-      await fetchNotifications();
-    } catch (error) {
-      console.error('Erro ao marcar todas como lidas', error);
-    }
-  };
+  const markAllAsReadMutation = useMutation({
+    mutationFn: () => apiClient.patch('/notifications/read-all'),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['notifications'] }),
+  });
 
   const toggleDropdown = () => setShowDropdown((prev) => !prev);
 
@@ -73,30 +58,33 @@ export default function NotificationBell() {
     <div className="relative" ref={dropdownRef}>
       <button
         onClick={toggleDropdown}
-        className="relative p-2 text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 focus:outline-none"
+        className="relative p-2 text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 focus:outline-none transition-colors"
       >
         <BellIcon className="w-6 h-6" />
         {unreadCount > 0 && (
-          <span className="absolute top-0 right-0 inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white transform translate-x-1/2 -translate-y-1/2 bg-red-600 rounded-full">
+          <span className="absolute top-0 right-0 inline-flex items-center justify-center px-2 py-1 text-xs font-bold leading-none text-white transform translate-x-1/2 -translate-y-1/2 bg-red-600 rounded-full animate-pulse">
             {unreadCount}
           </span>
         )}
       </button>
+      
       {showDropdown && (
-        <div className="absolute right-0 mt-2 w-80 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 z-50 max-h-96 overflow-y-auto">
-          <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
+        <div className="absolute right-0 mt-2 w-80 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 z-50 max-h-96 overflow-y-auto">
+          <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center sticky top-0 bg-white dark:bg-gray-800">
             <span className="font-semibold text-gray-900 dark:text-white">Notificações</span>
             {unreadCount > 0 && (
               <button
-                onClick={handleMarkAllAsRead}
+                onClick={() => markAllAsReadMutation.mutate()}
+                disabled={markAllAsReadMutation.isPending}
                 className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
               >
                 Marcar todas como lidas
               </button>
             )}
           </div>
-          {loading ? (
-            <div className="p-4 text-center text-gray-500 dark:text-gray-400">Carregando...</div>
+          
+          {isLoading ? (
+            <div className="p-4 text-center text-gray-500 animate-pulse">Carregando...</div>
           ) : notifications.length === 0 ? (
             <div className="p-4 text-center text-gray-500 dark:text-gray-400">
               Nenhuma notificação
@@ -106,7 +94,7 @@ export default function NotificationBell() {
               {notifications.map((n) => (
                 <li
                   key={n.id}
-                  className={`p-3 hover:bg-gray-50 dark:hover:bg-gray-700 ${
+                  className={`p-3 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${
                     !n.read ? 'bg-blue-50 dark:bg-blue-900/20' : ''
                   }`}
                 >
@@ -115,8 +103,8 @@ export default function NotificationBell() {
                       <p className="text-sm font-medium text-gray-900 dark:text-white">
                         {n.title}
                       </p>
-                      <p className="text-sm text-gray-600 dark:text-gray-300">{n.message}</p>
-                      <span className="text-xs text-gray-400">
+                      <p className="text-sm text-gray-600 dark:text-gray-300 mt-1">{n.message}</p>
+                      <span className="text-xs text-gray-400 mt-2 block">
                         {new Date(n.created_at).toLocaleDateString('pt-BR', {
                           hour: '2-digit',
                           minute: '2-digit',
@@ -125,10 +113,10 @@ export default function NotificationBell() {
                     </div>
                     {!n.read && (
                       <button
-                        onClick={() => handleMarkAsRead(n.id)}
-                        className="ml-2 text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                        onClick={() => markAsReadMutation.mutate(n.id)}
+                        className="ml-2 text-xs text-blue-600 dark:text-blue-400 hover:underline shrink-0"
                       >
-                        Marcar como lida
+                        Marcar lida
                       </button>
                     )}
                   </div>

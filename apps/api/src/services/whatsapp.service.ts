@@ -5,11 +5,18 @@ interface SendWhatsAppParams {
   message: string;
 }
 
-export async function sendWhatsAppMessage({ to, message }: SendWhatsAppParams) {
+interface SendTemplateParams {
+  to: string;
+  templateName: string;
+  languageCode?: string;
+  parameters: string[]; // Array de valores para preencher {{1}}, {{2}}, etc.
+}
+
+// Função auxiliar para centralizar o fetch, token e o timeout de 15s
+async function executeWhatsAppRequest(payload: any) {
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID!;
   const token = process.env.WHATSAPP_TOKEN!;
 
-  // 🆕 Adicionado o AbortSignal para 15 segundos
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 15000);
 
@@ -22,13 +29,8 @@ export async function sendWhatsAppMessage({ to, message }: SendWhatsAppParams) {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          to,
-          type: 'text',
-          text: { body: message },
-        }),
-        signal: controller.signal, // 🆕 Passa o sinal
+        body: JSON.stringify(payload),
+        signal: controller.signal,
       }
     );
 
@@ -36,14 +38,14 @@ export async function sendWhatsAppMessage({ to, message }: SendWhatsAppParams) {
 
     if (!response.ok) {
       const errorData = await response.json();
-      console.error('[WhatsApp] Erro:', errorData);
+      console.error('[WhatsApp] Erro na API:', errorData);
       throw new Error(
         errorData.error?.message || 'Erro ao enviar mensagem no WhatsApp'
       );
     }
 
     const data = await response.json();
-    console.log('[WhatsApp] Mensagem enviada:', data);
+    console.log('[WhatsApp] Envio bem-sucedido:', data);
     return data;
   } catch (error: any) {
     clearTimeout(timeoutId);
@@ -52,4 +54,57 @@ export async function sendWhatsAppMessage({ to, message }: SendWhatsAppParams) {
     }
     throw error;
   }
+}
+
+/**
+ * Envia uma mensagem de texto livre.
+ * ⚠️ Só funciona se o usuário tiver enviado uma mensagem para a empresa nas últimas 24h.
+ */
+export async function sendWhatsAppMessage({ to, message }: SendWhatsAppParams) {
+  const payload = {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'text',
+    text: { body: message },
+  };
+  
+  return executeWhatsAppRequest(payload);
+}
+
+/**
+ * Envia uma mensagem baseada em um Template pré-aprovado pela Meta.
+ * ✅ Funciona a qualquer momento, quebrando a barreira da janela de 24h.
+ */
+export async function sendWhatsAppTemplate({ 
+  to, 
+  templateName, 
+  languageCode = 'pt_BR', 
+  parameters 
+}: SendTemplateParams) {
+  
+  // Monta a estrutura de variáveis do template ({{1}}, {{2}}, etc.)
+  const components = [];
+  
+  if (parameters && parameters.length > 0) {
+    components.push({
+      type: 'body',
+      parameters: parameters.map(param => ({ 
+        type: 'text', 
+        text: param 
+      })),
+    });
+  }
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'template',
+    template: {
+      name: templateName,
+      language: { code: languageCode },
+      components: components.length > 0 ? components : undefined,
+    },
+  };
+
+  return executeWhatsAppRequest(payload);
 }

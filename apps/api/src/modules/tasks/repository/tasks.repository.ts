@@ -38,7 +38,6 @@ export const tasksRepository = {
     const { search, priority, status, categoryId, due_date_from, due_date_to, page, limit } = filters;
     const skip = (page - 1) * limit;
 
-    // 🆕 Monta as condições em array para poder combinar ORs diferentes
     const AND_CONDITIONS: Prisma.TaskWhereInput[] = [];
 
     // Busca (título ou descrição)
@@ -51,7 +50,7 @@ export const tasksRepository = {
       });
     }
 
-    // 🆕 Filtro por data — inclui tarefas com due_date no range OU subtarefas no range
+    // Filtro por data — inclui tarefas com due_date no range OU subtarefas no range
     if (due_date_from || due_date_to) {
       const dateFilter: Prisma.DateTimeFilter = {};
       if (due_date_from) dateFilter.gte = due_date_from;
@@ -75,7 +74,8 @@ export const tasksRepository = {
       user_id: userId,
       deleted_at: null,
       ...(priority && { priority }),
-      ...(status && { status }),
+      // 🆕 Só filtra por status se não for 'all' (Todas as tarefas)
+      ...(status && status !== 'all' && { status }), 
       ...(categoryId && {
         categories: { some: { category_id: categoryId } },
       }),
@@ -128,15 +128,21 @@ export const tasksRepository = {
     return result.count;
   },
 
+  // 🆕 CONTAGEM ATUALIZADA COM O STATUS 'IN_PROGRESS'
   async getCounts(userId: string) {
-    const [pending, done] = await Promise.all([
+    const [pending, in_progress, done] = await Promise.all([
       prisma.task.count({
         where: { user_id: userId, status: 'pending', deleted_at: null },
+      }),
+      prisma.task.count({
+        where: { user_id: userId, status: 'in_progress', deleted_at: null },
       }),
       prisma.task.count({
         where: { user_id: userId, status: 'done', deleted_at: null },
       }),
     ]);
-    return { pending, done, total: pending + done };
+    
+    // Soma corretamente no total geral
+    return { pending, in_progress, done, total: pending + in_progress + done };
   },
 };

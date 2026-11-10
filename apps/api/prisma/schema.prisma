@@ -85,6 +85,7 @@ model Task {
   status      String    @default("pending")
   start_date  DateTime? // 🆕 Adicione esta linha
   due_date    DateTime?
+  reminder_sent Boolean   @default(false) // 🆕 Adicione isso
   created_at  DateTime  @default(now())
   updated_at  DateTime  @updatedAt
   deleted_at DateTime?
@@ -139,9 +140,10 @@ model PushSubscription {
   id        String   @id @default(cuid())
   user_id   String
   user      User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  endpoint  String   @unique
-  p256dh    String
-  auth      String
+  endpoint  String?  @unique
+  p256dh    String?
+  auth      String?
+  expo_token String?  @unique // Para Mobile (Expo)
   created_at DateTime @default(now())
 
   @@index([user_id])
@@ -156,6 +158,7 @@ model Subtask {
   completed   Boolean  @default(false)
   completed_at DateTime?
   due_date     DateTime?
+  reminder_sent Boolean   @default(false) // 🆕 Adicione isso
   order      Int      @default(0)
   created_at  DateTime @default(now())
   updated_at  DateTime @updatedAt

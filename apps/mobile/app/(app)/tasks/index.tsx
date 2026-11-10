@@ -1,7 +1,8 @@
 import { useCallback, useState, useMemo, useEffect } from 'react';
 import { 
   View, FlatList, StyleSheet, Text, TouchableOpacity, 
-  RefreshControl, TextInput, ActivityIndicator, Alert
+  RefreshControl, TextInput, ActivityIndicator, Alert,
+  ScrollView
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { syncService } from '@/src/services/sync';
@@ -21,25 +22,154 @@ LocaleConfig.locales['pt'] = {
 };
 LocaleConfig.defaultLocale = 'pt';
 
+// ==========================================
+// Tipagens
+// ==========================================
 interface Category { id: string; name: string; color: string; }
-interface Subtask { id: string; title: string; completed: boolean; due_date?: string | null; }
+interface Subtask { id: string; title: string; completed: boolean; due_date?: string | null; order?: number; }
 interface Task {
   id: string;
   title: string;
   description?: string;
   priority: 'low' | 'medium' | 'high';
-  status: 'pending' | 'done';
+  status: 'pending' | 'in_progress' | 'done';
+  start_date?: string;
   due_date?: string;
   categories?: { category: Category }[];
   subtasks?: Subtask[];
   recurrence_type?: string | null;
-  _count?: { attachments: number }; // 🆕 Adicionado
+  updated_at?: string;
+  _count?: { attachments: number };
 }
 
-type TabType = 'pending' | 'done' | 'all';
+type TabType = 'pending' | 'in_progress' | 'done' | 'all';
+type ViewMode = 'list' | 'kanban';
+type QuickFilter = 'today' | 'week' | 'month' | 'overdue' | null;
 
-const sortSubtasksByDate = (subtasks: Subtask[]) => {
-  return [...subtasks].sort((a, b) => {
+// ==========================================
+// Helpers de Data
+// ==========================================
+const isSameDay = (d1: Date, d2: Date) => {
+  return d1.getFullYear() === d2.getFullYear() &&
+         d1.getMonth() === d2.getMonth() &&
+         d1.getDate() === d2.getDate();
+};
+
+const isOverdue = (date?: string | null) => {
+  if (!date) return false;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return new Date(date) < today;
+};
+
+const getQuickFilterRange = (quick: QuickFilter): { from?: string; to?: string } => {
+  if (!quick) return {};
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  switch (quick) {
+    case 'today': {
+      const from = new Date(today);
+      const to = new Date(today);
+      to.setHours(23, 59, 59, 999);
+      return { from: from.toISOString(), to: to.toISOString() };
+    }
+    case 'week': {
+      const to = new Date(today);
+      const dayOfWeek = today.getDay();
+      const daysUntilSunday = dayOfWeek === 0 ? 0 : 7 - dayOfWeek;
+      to.setDate(today.getDate() + daysUntilSunday);
+      to.setHours(23, 59, 59, 999);
+      return { from: today.toISOString(), to: to.toISOString() };
+    }
+    case 'month': {
+      const from = new Date(today.getFullYear(), today.getMonth(), 1);
+      const to = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+      to.setHours(23, 59, 59, 999);
+      return { from: from.toISOString(), to: to.toISOString() };
+    }
+    case 'overdue': return { to: now.toISOString() };
+    default: return {};
+  }
+};
+
+const matchesSubtaskQuickFilter = (sub: Subtask, filter: QuickFilter): boolean => {
+  if (!filter) return true;
+  
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  if (filter === 'overdue') {
+    if (!sub.due_date) return false;
+    return !sub.completed && new Date(sub.due_date).getTime() < today.getTime();
+  }
+  
+  if (filter === 'today') {
+    if (!sub.due_date) return true;
+    return isSameDay(new Date(sub.due_date), new Date());
+  }
+  
+  if (filter === 'week' || filter === 'month') {
+    if (!sub.due_date) return true;
+    const range = getQuickFilterRange(filter);
+    const subDue = new Date(sub.due_date).getTime();
+    if (range.from && subDue < new Date(range.from).getTime()) return false;
+    if (range.to && subDue > new Date(range.to).getTime()) return false;
+    return true;
+  }
+  return true;
+};
+
+const matchesQuickFilter = (task: Task, filter: QuickFilter): boolean => {
+  if (!filter) return true;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  let taskMatches = false;
+  
+  if (filter === 'overdue') {
+    if (task.due_date) {
+      const due = new Date(task.due_date).getTime();
+      if (task.status === 'done') {
+        const completed = task.updated_at ? new Date(task.updated_at).getTime() : Date.now();
+        taskMatches = completed > due;
+      } else {
+        taskMatches = Date.now() > due;
+      }
+    }
+  } else if (filter === 'today') {
+    if (task.status === 'done') {
+      taskMatches = task.updated_at ? isSameDay(new Date(task.updated_at), new Date()) : true;
+    } else {
+      taskMatches = task.due_date ? isSameDay(new Date(task.due_date), new Date()) : true;
+    }
+  } else if (filter === 'week' || filter === 'month') {
+    const range = getQuickFilterRange(filter);
+    if (task.status === 'done') {
+      if (!task.updated_at) taskMatches = true;
+      else {
+        const updated = new Date(task.updated_at).getTime();
+        taskMatches = (!range.from || updated >= new Date(range.from).getTime()) && (!range.to || updated <= new Date(range.to).getTime());
+      }
+    } else {
+      if (!task.due_date) {
+        taskMatches = true;
+      } else {
+        const due = new Date(task.due_date).getTime();
+        taskMatches = (!range.from || due >= new Date(range.from).getTime()) && (!range.to || due <= new Date(range.to).getTime());
+      }
+    }
+  }
+
+  if (taskMatches) return true;
+  if (task.subtasks && task.subtasks.length > 0) {
+    return task.subtasks.some(sub => matchesSubtaskQuickFilter(sub, filter));
+  }
+  return false;
+};
+
+const sortTasks = (tasks: Task[]): Task[] => {
+  return [...tasks].sort((a, b) => {
     if (!a.due_date && !b.due_date) return 0;
     if (!a.due_date) return 1;
     if (!b.due_date) return -1;
@@ -47,10 +177,139 @@ const sortSubtasksByDate = (subtasks: Subtask[]) => {
   });
 };
 
+const sortSubtasksByDate = (subtasks: Subtask[]) => {
+  return [...subtasks].sort((a, b) => {
+    if (!a.due_date && !b.due_date) return (a.order ?? 0) - (b.order ?? 0);
+    if (!a.due_date) return 1;
+    if (!b.due_date) return -1;
+    const aTime = new Date(a.due_date).getTime();
+    const bTime = new Date(b.due_date).getTime();
+    if (aTime !== bTime) return aTime - bTime;
+    return (a.order ?? 0) - (b.order ?? 0);
+  });
+};
+
+// ==========================================
+// Componentes do Kanban
+// ==========================================
+function KanbanCard({ task, onMoveStatus, onToggleSubtask, quickFilter }: { task: Task, onMoveStatus: (id: string, nextStatus: string) => void, onToggleSubtask: (taskId: string, subtaskId: string, completed: boolean) => void, quickFilter: QuickFilter }) {
+  const [expanded, setExpanded] = useState(false);
+  const completedCount = task.subtasks?.filter(s => s.completed).length || 0;
+  const totalSubtasks = task.subtasks?.length || 0;
+  const progress = totalSubtasks > 0 ? Math.round((completedCount / totalSubtasks) * 100) : 0;
+  const taskIsOverdue = isOverdue(task.due_date) && task.status !== 'done';
+
+  const nextStatus = task.status === 'pending' ? 'in_progress' : task.status === 'in_progress' ? 'done' : 'pending';
+  const nextIcon = task.status === 'pending' ? 'play' : task.status === 'in_progress' ? 'checkmark' : 'refresh';
+
+  let borderColor = '#e5e7eb';
+  if (task.status === 'done') borderColor = '#22c55e';
+  else if (taskIsOverdue) borderColor = '#ef4444';
+  else if (task.status === 'in_progress') borderColor = '#3b82f6';
+
+  const sortedSubtasks = task.subtasks ? sortSubtasksByDate(task.subtasks) : [];
+  const visibleSubtasks = quickFilter
+    ? sortedSubtasks.filter(sub => matchesSubtaskQuickFilter(sub, quickFilter))
+    : sortedSubtasks;
+
+  return (
+    <View style={[styles.kanbanCard, { borderLeftColor: borderColor }]}>
+      <TouchableOpacity onPress={() => setExpanded(!expanded)} activeOpacity={0.8}>
+        <View style={styles.kanbanCardHeader}>
+          <Text style={[styles.kanbanCardTitle, task.status === 'done' && styles.textLineThrough]} numberOfLines={3}>
+            {task.title}
+          </Text>
+          <TouchableOpacity onPress={() => onMoveStatus(task.id, nextStatus)} style={styles.moveBtn}>
+            <Ionicons name={nextIcon as any} size={14} color="#fff" />
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.kanbanBadges}>
+          {task.categories?.map(c => (
+            <View key={c.category.id} style={[styles.badge, { backgroundColor: c.category.color }]}>
+              <Text style={styles.badgeText} numberOfLines={1}>{c.category.name}</Text>
+            </View>
+          ))}
+          <View style={[styles.badge, { backgroundColor: task.priority === 'high' ? '#ef4444' : task.priority === 'medium' ? '#eab308' : '#22c55e' }]}>
+            <Text style={styles.badgeText}>{task.priority === 'high' ? 'Alta' : task.priority === 'medium' ? 'Média' : 'Baixa'}</Text>
+          </View>
+        </View>
+
+        {task.due_date && (
+          <View style={styles.kanbanDate}>
+            <Ionicons name="calendar-outline" size={10} color={taskIsOverdue ? '#ef4444' : '#6b7280'} />
+            <Text style={[styles.kanbanDateText, taskIsOverdue && { color: '#ef4444', fontWeight: 'bold' }]}>
+              {new Date(task.due_date).toLocaleDateString('pt-BR')}
+            </Text>
+          </View>
+        )}
+
+        {totalSubtasks > 0 && (
+          <View style={styles.kanbanProgress}>
+            <View style={styles.progressBarBg}>
+              <View style={[styles.progressBarFill, { width: `${progress}%`, backgroundColor: task.status === 'done' ? '#22c55e' : '#3b82f6' }]} />
+            </View>
+            <Text style={styles.progressText}>{progress}%</Text>
+          </View>
+        )}
+      </TouchableOpacity>
+
+      {expanded && task.subtasks && task.subtasks.length > 0 && (
+        <View style={styles.kanbanSubtasks}>
+          {visibleSubtasks.length === 0 ? (
+            <Text style={{ fontSize: 10, color: '#9ca3af', fontStyle: 'italic' }}>Nenhuma subtarefa no período.</Text>
+          ) : (
+            visibleSubtasks.map(sub => (
+              // 🆕 Adicionado pointerEvents="none" nos filhos para garantir o clique no TouchableOpacity no Web
+              <TouchableOpacity 
+                key={sub.id} 
+                style={styles.subtaskRow} 
+                onPress={() => onToggleSubtask(task.id, sub.id, !sub.completed)}
+                activeOpacity={0.7}
+              >
+                <View pointerEvents="none" style={[styles.checkbox, sub.completed && styles.checkboxChecked]}>
+                  {sub.completed && <Ionicons name="checkmark" size={10} color="#fff" />}
+                </View>
+                <Text pointerEvents="none" style={[styles.subtaskTitle, sub.completed && styles.textLineThrough]} numberOfLines={2}>
+                  {sub.title}
+                </Text>
+              </TouchableOpacity>
+            ))
+          )}
+        </View>
+      )}
+    </View>
+  );
+}
+
+function KanbanColumn({ title, tasks, color, onMoveStatus, onToggleSubtask, quickFilter }: { title: string, tasks: Task[], color: string, onMoveStatus: (id: string, nextStatus: string) => void, onToggleSubtask: (taskId: string, subtaskId: string, completed: boolean) => void, quickFilter: QuickFilter }) {
+  return (
+    <View style={styles.columnContainer}>
+      <View style={styles.columnHeader}>
+        <View style={[styles.columnDot, { backgroundColor: color }]} />
+        <Text style={styles.columnTitle} numberOfLines={1}>{title}</Text>
+        <Text style={styles.columnCount}>{tasks.length}</Text>
+      </View>
+      <ScrollView style={styles.columnScroll} contentContainerStyle={{ paddingBottom: 20 }}>
+        {tasks.length === 0 ? (
+          <Text style={styles.emptyColumnText}>Vazio</Text>
+        ) : (
+          tasks.map(task => <KanbanCard key={task.id} task={task} onMoveStatus={onMoveStatus} onToggleSubtask={onToggleSubtask} quickFilter={quickFilter} />)
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
+// ==========================================
+// Componente Principal
+// ==========================================
 export default function TasksScreen() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [activeTab, setActiveTab] = useState<TabType>('pending');
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>(null);
   const [search, setSearch] = useState('');
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
   
@@ -98,15 +357,9 @@ export default function TasksScreen() {
     setTaskToDelete(null);
   };
 
-  const toggleExpand = (id: string) => {
-    const newSet = new Set(expandedTasks);
-    if (newSet.has(id)) newSet.delete(id);
-    else newSet.add(id);
-    setExpandedTasks(newSet);
-  };
-
+  // 🆕 Usando prev => prev.map para garantir atualização correta do estado
   const handleToggleSubtask = async (taskId: string, subtaskId: string, currentCompleted: boolean) => {
-    setTasks(tasks.map(t => 
+    setTasks(prev => prev.map(t => 
       t.id === taskId 
         ? { ...t, subtasks: t.subtasks?.map(s => s.id === subtaskId ? { ...s, completed: !currentCompleted } : s) }
         : t
@@ -114,13 +367,37 @@ export default function TasksScreen() {
     try {
       await apiClient.patch(`/tasks/${taskId}/subtasks/${subtaskId}`, { completed: !currentCompleted });
     } catch {
-      setTasks(tasks.map(t => 
+      setTasks(prev => prev.map(t => 
         t.id === taskId 
           ? { ...t, subtasks: t.subtasks?.map(s => s.id === subtaskId ? { ...s, completed: currentCompleted } : s) }
           : t
       ));
       Alert.alert('Erro', 'Não foi possível atualizar a subtarefa.');
     }
+  };
+
+  const handleMoveStatus = async (taskId: string, newStatus: string) => {
+    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, status: newStatus as any } : t));
+    try {
+      await syncService.updateTask(taskId, { status: newStatus });
+    } catch {
+      loadCache();
+      Alert.alert('Erro', 'Não foi possível mover a tarefa.');
+    }
+  };
+
+  const handleToggleStatusList = (task: Task) => {
+    let nextStatus: 'pending' | 'in_progress' | 'done' = 'pending';
+    if (task.status === 'pending') nextStatus = 'in_progress';
+    else if (task.status === 'in_progress') nextStatus = 'done';
+    handleMoveStatus(task.id, nextStatus);
+  };
+
+  const toggleExpand = (id: string) => {
+    const newSet = new Set(expandedTasks);
+    if (newSet.has(id)) newSet.delete(id);
+    else newSet.add(id);
+    setExpandedTasks(newSet);
   };
 
   const openEditModal = (task: Task, field: 'priority' | 'status' | 'date' | 'category') => {
@@ -145,18 +422,18 @@ export default function TasksScreen() {
     setSavingMeta(true);
     
     if (editingTask.field === 'priority') {
-      setTasks(tasks.map(t => t.id === editingTask.task.id ? { ...t, priority: payload.priority } : t));
+      setTasks(prev => prev.map(t => t.id === editingTask.task.id ? { ...t, priority: payload.priority } : t));
     } else if (editingTask.field === 'status') {
-      setTasks(tasks.map(t => t.id === editingTask.task.id ? { ...t, status: payload.status } : t));
+      setTasks(prev => prev.map(t => t.id === editingTask.task.id ? { ...t, status: payload.status } : t));
     } else if (editingTask.field === 'date') {
-      setTasks(tasks.map(t => t.id === editingTask.task.id ? { ...t, due_date: payload.due_date } : t));
+      setTasks(prev => prev.map(t => t.id === editingTask.task.id ? { ...t, due_date: payload.due_date } : t));
     } else if (editingTask.field === 'category') {
       const cachedCategories = (await storage.getItem<Category[]>('categories_cache')) || [];
       const optimisticCategories = (payload.categoryIds || []).map((cid: string) => {
         const cat = cachedCategories.find((c) => c.id === cid);
         return cat ? { category: cat } : null;
       }).filter(Boolean);
-      setTasks(tasks.map(t => t.id === editingTask.task.id ? { ...t, categories: optimisticCategories } : t));
+      setTasks(prev => prev.map(t => t.id === editingTask.task.id ? { ...t, categories: optimisticCategories } : t));
     }
 
     try {
@@ -210,7 +487,7 @@ export default function TasksScreen() {
       const localDate = new Date(year, month - 1, day, hours || 0, minutes || 0);
       const isoDate = localDate.toISOString();
 
-      setTasks(tasks.map(t => 
+      setTasks(prev => prev.map(t => 
         t.id === subtaskDateEdit.taskId 
           ? { ...t, subtasks: t.subtasks?.map(s => s.id === subtaskDateEdit.subtask.id ? { ...s, due_date: isoDate } : s) }
           : t
@@ -229,7 +506,7 @@ export default function TasksScreen() {
     if (!subtaskDateEdit) return;
     setSavingSubDate(true);
     
-    setTasks(tasks.map(t => 
+    setTasks(prev => prev.map(t => 
       t.id === subtaskDateEdit.taskId 
         ? { ...t, subtasks: t.subtasks?.map(s => s.id === subtaskDateEdit.subtask.id ? { ...s, due_date: null } : s) }
         : t
@@ -245,178 +522,267 @@ export default function TasksScreen() {
     }
   };
 
+  // ==========================================
+  // Filtros e Contadores
+  // ==========================================
+  const tabCounts = useMemo(() => {
+    const baseFiltered = tasks.filter(t => {
+      if (search && !t.title.toLowerCase().includes(search.toLowerCase()) && !t.description?.toLowerCase().includes(search.toLowerCase())) return false;
+      if (!matchesQuickFilter(t, quickFilter)) return false;
+      return true;
+    });
+    return {
+      pending: baseFiltered.filter(t => t.status === 'pending').length,
+      in_progress: baseFiltered.filter(t => t.status === 'in_progress').length,
+      done: baseFiltered.filter(t => t.status === 'done').length,
+      all: baseFiltered.length,
+    };
+  }, [tasks, search, quickFilter]);
+
   const filteredTasks = useMemo(() => {
     const filtered = tasks.filter(t => {
-      if (activeTab === 'pending' && t.status === 'done') return false;
-      if (activeTab === 'done' && t.status !== 'done') return false;
+      if (activeTab !== 'all' && t.status !== activeTab) return false;
       if (search && !t.title.toLowerCase().includes(search.toLowerCase()) && !t.description?.toLowerCase().includes(search.toLowerCase())) return false;
+      if (!matchesQuickFilter(t, quickFilter)) return false;
       return true;
     });
 
-    return filtered.sort((a, b) => {
-      if (!a.due_date && !b.due_date) return 0;
-      if (!a.due_date) return 1;
-      if (!b.due_date) return -1;
-      return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
-    });
-  }, [tasks, activeTab, search]);
+    return sortTasks(filtered);
+  }, [tasks, activeTab, search, quickFilter]);
+
+  const kanbanTasks = useMemo(() => {
+    const filtered = tasks.filter(t => matchesQuickFilter(t, quickFilter));
+    return sortTasks(filtered);
+  }, [tasks, quickFilter]);
 
   const priorityColors = { low: '#22c55e', medium: '#eab308', high: '#ef4444' };
   const getPriorityLabel = (p: string) => p === 'low' ? 'Baixa' : p === 'medium' ? 'Média' : 'Alta';
 
+  // ==========================================
+  // Render
+  // ==========================================
   return (
     <View style={styles.container}>
-      <View style={styles.tabsContainer}>
-        {(['pending', 'done', 'all'] as TabType[]).map(tab => (
-          <TouchableOpacity key={tab} style={[styles.tab, activeTab === tab && styles.tabActive]} onPress={() => setActiveTab(tab)}>
-            <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
-              {tab === 'pending' ? 'Pendentes' : tab === 'done' ? 'Concluídas' : 'Todas'}
-            </Text>
+      <View style={styles.header}>
+        <View style={styles.viewToggle}>
+          <TouchableOpacity style={[styles.toggleBtn, viewMode === 'list' && styles.toggleActive]} onPress={() => setViewMode('list')}>
+            <Ionicons name="list" size={16} color={viewMode === 'list' ? '#2563eb' : '#6b7280'} />
+            <Text style={[styles.toggleText, viewMode === 'list' && styles.toggleTextActive]}>Lista</Text>
           </TouchableOpacity>
-        ))}
+          <TouchableOpacity style={[styles.toggleBtn, viewMode === 'kanban' && styles.toggleActive]} onPress={() => setViewMode('kanban')}>
+            <Ionicons name="albums" size={16} color={viewMode === 'kanban' ? '#2563eb' : '#6b7280'} />
+            <Text style={[styles.toggleText, viewMode === 'kanban' && styles.toggleTextActive]}>Kanban</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
-      <View style={styles.searchContainer}>
-        <Ionicons name="search" size={20} color="#9ca3af" style={styles.searchIcon} />
-        <TextInput style={styles.searchInput} placeholder="Buscar tarefas..." value={search} onChangeText={setSearch} />
+      {/* Quick Filters */}
+      <View style={{ paddingHorizontal: 16, paddingBottom: 12 }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+          {(['today', 'week', 'month', 'overdue'] as const).map(q => (
+            <TouchableOpacity 
+              key={q} 
+              style={[styles.quickFilterBtn, quickFilter === q && styles.quickFilterActive]}
+              onPress={() => setQuickFilter(quickFilter === q ? null : q)}
+            >
+              <Ionicons 
+                name={q === 'today' ? 'sunny' : q === 'week' ? 'calendar' : q === 'month' ? 'calendar-outline' : 'warning'} 
+                size={14} 
+                color={quickFilter === q ? '#fff' : '#6b7280'} 
+              />
+              <Text style={[styles.quickFilterText, quickFilter === q && { color: '#fff' }]}>
+                {q === 'today' ? 'Hoje' : q === 'week' ? 'Esta semana' : q === 'month' ? 'Este mês' : 'Atrasadas'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+          {quickFilter && (
+            <TouchableOpacity 
+              style={[styles.quickFilterBtn, { borderColor: '#e5e7eb', backgroundColor: '#f3f4f6' }]} 
+              onPress={() => setQuickFilter(null)}
+            >
+              <Ionicons name="close-circle" size={14} color="#6b7280" />
+              <Text style={[styles.quickFilterText, { color: '#6b7280' }]}>Limpar</Text>
+            </TouchableOpacity>
+          )}
+        </ScrollView>
       </View>
 
-      <FlatList
-        data={filteredTasks}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={{ paddingBottom: 80 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        renderItem={({ item }) => {
-          const isDone = item.status === 'done';
-          const isExpanded = expandedTasks.has(item.id);
-          const completedSubs = item.subtasks?.filter(s => s.completed).length || 0;
-          const totalSubs = item.subtasks?.length || 0;
-          const progress = totalSubs > 0 ? Math.round((completedSubs / totalSubs) * 100) : 0;
-          const sortedSubtasks = item.subtasks ? sortSubtasksByDate(item.subtasks) : [];
+      {viewMode === 'list' ? (
+        <View style={{ flex: 1 }}>
+          {/* Abas com Contadores */}
+          <View style={styles.tabsContainer}>
+            {(['pending', 'in_progress', 'done', 'all'] as TabType[]).map(tab => {
+              const isActive = activeTab === tab;
+              const label = tab === 'pending' ? 'A Fazer' : tab === 'in_progress' ? 'Em Progresso' : tab === 'done' ? 'Concluídas' : 'Todas';
+              const count = tabCounts[tab];
 
-          return (
-            <View style={[styles.card, isDone && { opacity: 0.7, backgroundColor: '#f3f4f6' }]}>
-              <View style={styles.cardHeader}>
-                <View style={styles.cardHeaderLeft}>
-                  <TouchableOpacity onPress={() => toggleExpand(item.id)} style={{ padding: 4, marginRight: 4 }}>
-                    <Ionicons name={isExpanded ? "chevron-down" : "chevron-forward"} size={20} color="#6b7280" />
-                  </TouchableOpacity>
-                  <Text style={[styles.cardTitle, isDone && styles.textLineThrough]} numberOfLines={2}>{item.title}</Text>
+              return (
+                <TouchableOpacity key={tab} style={[styles.tab, isActive && styles.tabActive]} onPress={() => setActiveTab(tab)}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                    <Text style={[styles.tabText, isActive && styles.tabTextActive]}>{label}</Text>
+                    <View style={[styles.tabBadge, isActive && styles.tabBadgeActive]}>
+                      <Text style={[styles.tabBadgeText, isActive && styles.tabBadgeTextActive]}>{count}</Text>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <View style={styles.searchContainer}>
+            <Ionicons name="search" size={20} color="#9ca3af" style={styles.searchIcon} />
+            <TextInput style={styles.searchInput} placeholder="Buscar tarefas..." value={search} onChangeText={setSearch} />
+          </View>
+
+          <FlatList
+            data={filteredTasks}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={{ paddingBottom: 80 }}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            renderItem={({ item }) => {
+              const isDone = item.status === 'done';
+              const isInProgress = item.status === 'in_progress';
+              const isExpanded = expandedTasks.has(item.id);
+              const completedSubs = item.subtasks?.filter(s => s.completed).length || 0;
+              const totalSubs = item.subtasks?.length || 0;
+              const progress = totalSubs > 0 ? Math.round((completedSubs / totalSubs) * 100) : 0;
+              
+              const sortedSubtasks = item.subtasks ? sortSubtasksByDate(item.subtasks) : [];
+              const taskIsOverdue = isOverdue(item.due_date) && !isDone;
+
+              const visibleSubtasks = quickFilter
+                ? sortedSubtasks.filter(sub => matchesSubtaskQuickFilter(sub, quickFilter))
+                : sortedSubtasks;
+
+              return (
+                <View style={[styles.card, isDone && { opacity: 0.7, backgroundColor: '#f3f4f6' }, taskIsOverdue && { borderLeftColor: '#ef4444', borderLeftWidth: 4 }]}>
+                  <View style={styles.cardHeader}>
+                    <View style={styles.cardHeaderLeft}>
+                      <TouchableOpacity onPress={() => toggleExpand(item.id)} style={{ padding: 4, marginRight: 4 }}>
+                        <Ionicons name={isExpanded ? "chevron-down" : "chevron-forward"} size={20} color="#6b7280" />
+                      </TouchableOpacity>
+                      <Text style={[styles.cardTitle, isDone && styles.textLineThrough]} numberOfLines={2}>{item.title}</Text>
+                      
+                      {item.recurrence_type && <Ionicons name="repeat" size={14} color="#8b5cf6" style={{ marginLeft: 4 }} />}
+                      {item._count && item._count.attachments > 0 && <Ionicons name="attach" size={16} color="#6b7280" style={{ marginLeft: 4 }} />}
+                      {taskIsOverdue && <View style={styles.overdueBadge}><Text style={styles.overdueBadgeText}>Atrasada</Text></View>}
+                    </View>
+                    
+                    <View style={styles.cardActions}>
+                      <TouchableOpacity style={styles.actionBtn} onPress={() => router.push(`/tasks/${item.id}/edit`)}>
+                        <Ionicons name="pencil" size={16} color="#374151" />
+                      </TouchableOpacity>
+                      <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#fee2e2' }]} onPress={() => setTaskToDelete(item.id)}>
+                        <Ionicons name="trash" size={16} color="#ef4444" />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
+                  {item.description ? <Text style={styles.cardDesc} numberOfLines={2}>{item.description}</Text> : null}
                   
-                  {item.recurrence_type && <Ionicons name="repeat" size={14} color="#8b5cf6" style={{ marginLeft: 4 }} />}
-                  
-                  {/* 🆕 Ícone de Anexo na Listagem */}
-                  {item._count && item._count.attachments > 0 && (
-                    <Ionicons name="attach" size={16} color="#6b7280" style={{ marginLeft: 4 }} />
+                  <View style={styles.badgesRow}>
+                    {item.categories?.map(c => (
+                      <TouchableOpacity key={c.category.id} style={[styles.badge, { backgroundColor: c.category.color }]} onPress={() => openEditModal(item, 'category')}>
+                        <Text style={styles.badgeText}>{c.category.name}</Text>
+                      </TouchableOpacity>
+                    ))}
+                    
+                    <TouchableOpacity style={[styles.badge, { backgroundColor: '#e5e7eb', paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' }]} onPress={() => openEditModal(item, 'category')}>
+                      <Ionicons name="add" size={14} color="#6b7280" />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity style={[styles.badge, { backgroundColor: priorityColors[item.priority] }]} onPress={() => openEditModal(item, 'priority')}>
+                      <Text style={styles.badgeText}>{getPriorityLabel(item.priority)}</Text>
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity 
+                      style={[styles.badge, { backgroundColor: isDone ? '#22c55e' : isInProgress ? '#3b82f6' : '#f59e0b' }]}
+                      onPress={() => handleToggleStatusList(item)}
+                    >
+                      <Text style={styles.badgeText}>{isDone ? 'Concluída' : isInProgress ? 'Em Progresso' : 'Pendente'}</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity style={[styles.badge, { backgroundColor: '#eff6ff', borderWidth: 1, borderColor: '#bfdbfe' }]} onPress={() => openEditModal(item, 'date')}>
+                      <Text style={[styles.badgeText, { color: '#1d4ed8' }]}>
+                        {item.due_date ? new Date(item.due_date).toLocaleDateString('pt-BR') : '+ Data'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {totalSubs > 0 && (
+                    <View style={styles.progressContainer}>
+                      <View style={styles.progressBar}>
+                        <View style={[styles.progressFill, { width: `${progress}%`, backgroundColor: isDone ? '#22c55e' : '#2563eb' }]} />
+                      </View>
+                      <Text style={styles.progressText}>{progress}%</Text>
+                    </View>
+                  )}
+
+                  {isExpanded && totalSubs > 0 && (
+                    <View style={styles.subtasksContainer}>
+                      {quickFilter && visibleSubtasks.length !== totalSubs && (
+                         <Text style={{ fontSize: 12, color: '#6b7280', marginBottom: 8 }}>
+                           Mostrando {visibleSubtasks.length} de {totalSubs} subtarefas no período.
+                         </Text>
+                      )}
+                      
+                      {visibleSubtasks.length === 0 ? (
+                        <Text style={{ fontSize: 14, color: '#9ca3af', fontStyle: 'italic' }}>Nenhuma subtarefa no período selecionado.</Text>
+                      ) : (
+                        visibleSubtasks.map(sub => {
+                          const subOverdue = isOverdue(sub.due_date) && !sub.completed;
+                          return (
+                            <View key={sub.id} style={styles.subtaskItem}>
+                              <TouchableOpacity onPress={() => handleToggleSubtask(item.id, sub.id, sub.completed)} style={{ padding: 4, paddingRight: 8 }} activeOpacity={0.7}>
+                                <View pointerEvents="none" style={[styles.customCheckbox, sub.completed ? { backgroundColor: '#22c55e', borderColor: '#22c55e' } : { borderColor: '#d1d5db' }]}>
+                                  {sub.completed && <Ionicons name="checkmark" size={16} color="#fff" />}
+                                </View>
+                              </TouchableOpacity>
+                              <View style={{ flex: 1 }}>
+                                <TouchableOpacity onPress={() => handleToggleSubtask(item.id, sub.id, sub.completed)}>
+                                  <Text style={[styles.subtaskText, sub.completed && styles.textLineThrough]}>{sub.title}</Text>
+                                </TouchableOpacity>
+                                
+                                <TouchableOpacity onPress={() => openSubtaskDateModal(item.id, sub)} style={styles.subtaskDateBtn}>
+                                  <Ionicons name="calendar-outline" size={12} color={subOverdue ? '#ef4444' : '#2563eb'} />
+                                  <Text style={[styles.subtaskDateText, subOverdue && { color: '#ef4444', fontWeight: 'bold' }]}>
+                                    {sub.due_date 
+                                      ? `${subOverdue ? 'Atrasada: ' : 'Vence: '}${new Date(sub.due_date).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
+                                      : 'Adicionar data'}
+                                  </Text>
+                                </TouchableOpacity>
+                              </View>
+                            </View>
+                          );
+                        })
+                      )}
+                    </View>
                   )}
                 </View>
-                
-                <View style={styles.cardActions}>
-                  <TouchableOpacity style={styles.actionBtn} onPress={() => router.push(`/tasks/${item.id}/edit`)}>
-                    <Ionicons name="pencil" size={16} color="#374151" />
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[styles.actionBtn, { backgroundColor: '#fee2e2' }]} onPress={() => setTaskToDelete(item.id)}>
-                    <Ionicons name="trash" size={16} color="#ef4444" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              {item.description ? <Text style={styles.cardDesc} numberOfLines={2}>{item.description}</Text> : null}
-              
-              <View style={styles.badgesRow}>
-                {item.categories?.map(c => (
-                  <TouchableOpacity 
-                    key={c.category.id} 
-                    style={[styles.badge, { backgroundColor: c.category.color }]}
-                    onPress={() => openEditModal(item, 'category')}
-                  >
-                    <Text style={styles.badgeText}>{c.category.name}</Text>
-                  </TouchableOpacity>
-                ))}
-                
-                <TouchableOpacity 
-                  style={[styles.badge, { backgroundColor: '#e5e7eb', paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' }]} 
-                  onPress={() => openEditModal(item, 'category')}
-                >
-                  <Ionicons name="add" size={14} color="#6b7280" />
-                </TouchableOpacity>
-
-                <TouchableOpacity 
-                  style={[styles.badge, { backgroundColor: priorityColors[item.priority] }]}
-                  onPress={() => openEditModal(item, 'priority')}
-                >
-                  <Text style={styles.badgeText}>{getPriorityLabel(item.priority)}</Text>
-                </TouchableOpacity>
-                
-                <TouchableOpacity 
-                  style={[styles.badge, { backgroundColor: isDone ? '#22c55e' : '#f59e0b' }]}
-                  onPress={() => openEditModal(item, 'status')}
-                >
-                  <Text style={styles.badgeText}>{isDone ? 'Concluída' : 'Pendente'}</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity 
-                  style={[styles.badge, { backgroundColor: '#eff6ff', borderWidth: 1, borderColor: '#bfdbfe' }]}
-                  onPress={() => openEditModal(item, 'date')}
-                >
-                  <Text style={[styles.badgeText, { color: '#1d4ed8' }]}>
-                    {item.due_date ? new Date(item.due_date).toLocaleDateString('pt-BR') : '+ Data'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {totalSubs > 0 && (
-                <View style={styles.progressContainer}>
-                  <View style={styles.progressBar}>
-                    <View style={[styles.progressFill, { width: `${progress}%`, backgroundColor: isDone ? '#22c55e' : '#2563eb' }]} />
-                  </View>
-                  <Text style={styles.progressText}>{progress}%</Text>
-                </View>
-              )}
-
-              {isExpanded && sortedSubtasks.length > 0 && (
-                <View style={styles.subtasksContainer}>
-                  {sortedSubtasks.map(sub => {
-                    const isOverdue = sub.due_date && !sub.completed && new Date(sub.due_date) < new Date();
-                    return (
-                      <View key={sub.id} style={styles.subtaskItem}>
-                        <TouchableOpacity onPress={() => handleToggleSubtask(item.id, sub.id, sub.completed)} style={{ padding: 4, paddingRight: 8 }}>
-                          <View style={[
-                            styles.customCheckbox,
-                            sub.completed ? { backgroundColor: '#22c55e', borderColor: '#22c55e' } : { borderColor: '#d1d5db' }
-                          ]}>
-                            {sub.completed && <Ionicons name="checkmark" size={16} color="#fff" />}
-                          </View>
-                        </TouchableOpacity>
-                        <View style={{ flex: 1 }}>
-                          <TouchableOpacity onPress={() => handleToggleSubtask(item.id, sub.id, sub.completed)}>
-                            <Text style={[styles.subtaskText, sub.completed && styles.textLineThrough]}>{sub.title}</Text>
-                          </TouchableOpacity>
-                          
-                          <TouchableOpacity onPress={() => openSubtaskDateModal(item.id, sub)} style={styles.subtaskDateBtn}>
-                            <Ionicons name="calendar-outline" size={12} color={isOverdue ? '#ef4444' : '#2563eb'} />
-                            <Text style={[styles.subtaskDateText, isOverdue && { color: '#ef4444', fontWeight: 'bold' }]}>
-                              {sub.due_date 
-                                ? `${isOverdue ? 'Atrasada: ' : 'Vence: '}${new Date(sub.due_date).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
-                                : 'Adicionar data'}
-                            </Text>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    );
-                  })}
-                </View>
-              )}
-            </View>
-          );
-        }}
-        ListEmptyComponent={<View style={{ alignItems: 'center', marginTop: 40 }}><Ionicons name="clipboard-outline" size={48} color="#d1d5db" /><Text style={styles.empty}>Nenhuma tarefa encontrada.</Text></View>}
-      />
+              );
+            }}
+            ListEmptyComponent={<View style={{ alignItems: 'center', marginTop: 40 }}><Ionicons name="clipboard-outline" size={48} color="#d1d5db" /><Text style={styles.empty}>Nenhuma tarefa encontrada.</Text></View>}
+          />
+        </View>
+      ) : (
+        <View style={{ flex: 1, flexDirection: 'row', paddingHorizontal: 8, paddingBottom: 16 }}>
+          <View style={{ flex: 4, marginRight: 8 }}>
+            <KanbanColumn title="A Fazer" color="#f59e0b" tasks={kanbanTasks.filter(t => t.status === 'pending')} onMoveStatus={handleMoveStatus} onToggleSubtask={handleToggleSubtask} quickFilter={quickFilter} />
+          </View>
+          <View style={{ flex: 3, marginRight: 8 }}>
+            <KanbanColumn title="Em Progresso" color="#3b82f6" tasks={kanbanTasks.filter(t => t.status === 'in_progress')} onMoveStatus={handleMoveStatus} onToggleSubtask={handleToggleSubtask} quickFilter={quickFilter} />
+          </View>
+          <View style={{ flex: 3 }}>
+            <KanbanColumn title="Concluídas" color="#22c55e" tasks={kanbanTasks.filter(t => t.status === 'done')} onMoveStatus={handleMoveStatus} onToggleSubtask={handleToggleSubtask} quickFilter={quickFilter} />
+          </View>
+        </View>
+      )}
 
       <TouchableOpacity style={styles.fab} onPress={() => router.push('/tasks/create')}>
         <Ionicons name="add" size={28} color="#fff" />
       </TouchableOpacity>
 
+      {/* Modais */}
       <CustomModal visible={!!taskToDelete} onRequestClose={() => setTaskToDelete(null)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
@@ -453,10 +819,10 @@ export default function TasksScreen() {
               <>
                 <Text style={styles.modalTitle}>Status</Text>
                 <View style={{ gap: 12, marginTop: 12 }}>
-                  {(['pending', 'done'] as const).map(s => (
+                  {(['pending', 'in_progress', 'done'] as const).map(s => (
                     <TouchableOpacity key={s} style={[styles.modalOption, editingTask.task.status === s && { backgroundColor: '#eff6ff', borderColor: '#2563eb' }]} onPress={() => handleSaveMeta({ status: s })}>
-                      <Ionicons name={s === 'pending' ? 'time' : 'checkmark-circle'} size={20} color={s === 'pending' ? '#f59e0b' : '#22c55e'} />
-                      <Text style={styles.modalOptionText}>{s === 'pending' ? 'Pendente' : 'Concluída'}</Text>
+                      <Ionicons name={s === 'pending' ? 'time' : s === 'in_progress' ? 'flash' : 'checkmark-circle'} size={20} color={s === 'pending' ? '#f59e0b' : s === 'in_progress' ? '#3b82f6' : '#22c55e'} />
+                      <Text style={styles.modalOptionText}>{s === 'pending' ? 'Pendente' : s === 'in_progress' ? 'Em Progresso' : 'Concluída'}</Text>
                       {editingTask.task.status === s && <Ionicons name="checkmark" size={20} color="#2563eb" style={{ marginLeft: 'auto' }} />}
                     </TouchableOpacity>
                   ))}
@@ -602,14 +968,39 @@ function CategorySelectorQuick({ selectedIds, onToggle }: { selectedIds: string[
   );
 }
 
+// ==========================================
+// Estilos
+// ==========================================
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f9fafb' },
+  
+  // Header / Toggle
+  header: { padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e5e7eb' },
+  viewToggle: { flexDirection: 'row', backgroundColor: '#f3f4f6', borderRadius: 8, padding: 2, alignSelf: 'flex-start' },
+  toggleBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 6, paddingHorizontal: 16, borderRadius: 6 },
+  toggleActive: { backgroundColor: '#fff', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
+  toggleText: { fontSize: 13, fontWeight: '500', color: '#6b7280' },
+  toggleTextActive: { color: '#2563eb', fontWeight: 'bold' },
+
+  // Quick Filters
+  quickFilterBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 20, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e5e7eb' },
+  quickFilterActive: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
+  quickFilterText: { fontSize: 13, fontWeight: '500', color: '#4b5563' },
+
+  // Lista
   tabsContainer: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#e5e7eb' },
-  tab: { flex: 1, paddingVertical: 14, alignItems: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  tab: { flex: 1, paddingVertical: 12, alignItems: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
   tabActive: { borderBottomColor: '#2563eb' },
-  tabText: { fontSize: 14, fontWeight: '500', color: '#6b7280' },
+  tabText: { fontSize: 13, fontWeight: '500', color: '#6b7280' },
   tabTextActive: { color: '#2563eb', fontWeight: 'bold' },
-  searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', marginHorizontal: 16, marginTop: 16, marginBottom: 8, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#e5e7eb' },
+  
+  // Contadores nas Abas
+  tabBadge: { backgroundColor: '#e5e7eb', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 10 },
+  tabBadgeActive: { backgroundColor: '#bfdbfe' },
+  tabBadgeText: { fontSize: 11, fontWeight: 'bold', color: '#6b7280' },
+  tabBadgeTextActive: { color: '#2563eb' },
+
+  searchContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', marginHorizontal: 16, marginTop: 12, marginBottom: 8, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#e5e7eb' },
   searchIcon: { marginRight: 8 },
   searchInput: { flex: 1, paddingVertical: 10, fontSize: 15 },
   card: { backgroundColor: '#fff', marginHorizontal: 16, marginBottom: 12, borderRadius: 8, padding: 16, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, elevation: 2 },
@@ -630,18 +1021,40 @@ const styles = StyleSheet.create({
   subtasksContainer: { marginTop: 12, marginLeft: 28, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#f3f4f6' },
   subtaskItem: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12, gap: 8 },
   subtaskText: { fontSize: 14, color: '#374151', marginBottom: 4 },
-  customCheckbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 4,
-    borderWidth: 2,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'transparent',
-  },
+  customCheckbox: { width: 22, height: 22, borderRadius: 4, borderWidth: 2, justifyContent: 'center', alignItems: 'center', backgroundColor: 'transparent' },
   subtaskDateBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#eff6ff', alignSelf: 'flex-start', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
   subtaskDateText: { fontSize: 11, color: '#2563eb' },
+  overdueBadge: { backgroundColor: '#fee2e2', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, marginLeft: 8 },
+  overdueBadgeText: { color: '#ef4444', fontSize: 10, fontWeight: 'bold' },
   empty: { textAlign: 'center', marginTop: 12, color: '#6b7280' },
+
+  // Kanban (Adaptado)
+  columnContainer: { flex: 1, backgroundColor: '#f3f4f6', borderRadius: 8, padding: 6 },
+  columnHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8, paddingHorizontal: 2 },
+  columnDot: { width: 8, height: 8, borderRadius: 4, marginRight: 4 },
+  columnTitle: { fontSize: 12, fontWeight: 'bold', color: '#374151', flex: 1 },
+  columnCount: { backgroundColor: '#e5e7eb', color: '#6b7280', fontWeight: 'bold', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 10, fontSize: 10 },
+  columnScroll: { flex: 1 },
+  emptyColumnText: { textAlign: 'center', color: '#9ca3af', fontStyle: 'italic', marginTop: 20, fontSize: 11 },
+  
+  kanbanCard: { backgroundColor: '#fff', borderRadius: 6, padding: 8, marginBottom: 8, borderLeftWidth: 3, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
+  kanbanCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 },
+  kanbanCardTitle: { fontSize: 12, fontWeight: '600', color: '#111827', flex: 1, marginRight: 4 },
+  moveBtn: { backgroundColor: '#2563eb', padding: 4, borderRadius: 4, justifyContent: 'center', alignItems: 'center' },
+  kanbanBadges: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginBottom: 6 },
+  kanbanDate: { flexDirection: 'row', alignItems: 'center', gap: 2, marginBottom: 6 },
+  kanbanDateText: { fontSize: 10, color: '#6b7280' },
+  kanbanProgress: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
+  progressBarBg: { flex: 1, height: 3, backgroundColor: '#e5e7eb', borderRadius: 1.5, overflow: 'hidden' },
+  progressBarFill: { height: '100%', borderRadius: 1.5 },
+  progressText: { fontSize: 9, color: '#6b7280', textAlign: 'right' },
+  kanbanSubtasks: { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#f3f4f6', gap: 4 },
+  subtaskRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4 },
+  checkbox: { width: 14, height: 14, borderRadius: 3, borderWidth: 1, borderColor: '#d1d5db', justifyContent: 'center', alignItems: 'center' },
+  checkboxChecked: { backgroundColor: '#22c55e', borderColor: '#22c55e' },
+  subtaskTitle: { fontSize: 10, color: '#4b5563', flex: 1 },
+
+  // Modais e FAB
   fab: { position: 'absolute', bottom: 20, right: 20, backgroundColor: '#2563eb', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', elevation: 4 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
   modalContent: { backgroundColor: '#fff', padding: 24, borderRadius: 12, width: '85%', maxWidth: 400 },

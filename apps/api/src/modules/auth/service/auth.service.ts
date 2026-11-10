@@ -15,11 +15,18 @@ const REFRESH_EXPIRES_IN = '7d';
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MINUTES = 15;
 
+// 🆕 Função auxiliar para lançar erros com o Status Code correto
+function createAuthError(message: string, statusCode: number = 400) {
+  const error: any = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
 export const authService = {
   async register(data: RegisterInput) {
     const existing = await authRepository.findByEmail(data.email);
     if (existing) {
-      throw new Error('Email já cadastrado');
+      throw createAuthError('Email já cadastrado', 409);
     }
 
     const password_hash = await hash(data.password, 10);
@@ -55,8 +62,8 @@ export const authService = {
       include: { user: true },
     });
 
-    if (!record) throw new Error('Token inválido');
-    if (new Date() > record.expires_at) throw new Error('Token expirado');
+    if (!record) throw createAuthError('Token inválido', 400);
+    if (new Date() > record.expires_at) throw createAuthError('Token expirado', 400);
 
     await prisma.user.update({
       where: { id: record.user_id },
@@ -70,8 +77,8 @@ export const authService = {
 
   async resendVerification(email: string) {
     const user = await authRepository.findByEmail(email);
-    if (!user) throw new Error('Usuário não encontrado');
-    if (user.email_verified) throw new Error('E-mail já verificado');
+    if (!user) throw createAuthError('Usuário não encontrado', 404);
+    if (user.email_verified) throw createAuthError('E-mail já verificado', 400);
 
     await prisma.emailVerificationToken.deleteMany({ where: { user_id: user.id } });
 
@@ -95,8 +102,8 @@ export const authService = {
     const user = await authRepository.findByEmail(data.email);
 
     if (!user) {
-      // Não revela se o email existe ou não
-      throw new Error('Credenciais inválidas');
+      // 401 Unauthorized
+      throw createAuthError('Credenciais inválidas', 401);
     }
 
     // 🆕 Verifica se a conta está bloqueada
@@ -104,14 +111,17 @@ export const authService = {
       const minutesLeft = Math.ceil(
         (user.locked_until.getTime() - Date.now()) / 1000 / 60
       );
-      throw new Error(
-        `Conta temporariamente bloqueada por segurança. Tente novamente em ${minutesLeft} minuto(s).`
+      // 429 Too Many Requests ou 423 Locked (estou usando 429 para padronizar com o Rate Limit)
+      throw createAuthError(
+        `Conta temporariamente bloqueada por segurança. Tente novamente em ${minutesLeft} minuto(s).`,
+        429
       );
     }
 
     // Verifica se o e-mail foi confirmado
     if (!user.email_verified) {
-      throw new Error('E-mail não verificado. Verifique sua caixa de entrada.');
+      // 403 Forbidden
+      throw createAuthError('E-mail não verificado. Verifique sua caixa de entrada.', 403);
     }
 
     const passwordMatch = await compare(data.password, user.password_hash);
@@ -137,8 +147,10 @@ export const authService = {
           `[Security] Conta bloqueada por excesso de tentativas: ${user.email}`
         );
 
-        throw new Error(
-          `Muitas tentativas falhas. Conta bloqueada por ${LOCK_DURATION_MINUTES} minutos.`
+        // 429 Too Many Requests
+        throw createAuthError(
+          `Muitas tentativas falhas. Conta bloqueada por ${LOCK_DURATION_MINUTES} minutos.`,
+          429
         );
       }
 
@@ -148,8 +160,10 @@ export const authService = {
       });
 
       const remaining = MAX_FAILED_ATTEMPTS - newAttempts;
-      throw new Error(
-        `Credenciais inválidas. ${remaining} tentativa(s) restante(s) antes do bloqueio.`
+      // 401 Unauthorized
+      throw createAuthError(
+        `Credenciais inválidas. ${remaining} tentativa(s) restante(s) antes do bloqueio.`,
+        401
       );
     }
 
@@ -191,10 +205,10 @@ export const authService = {
       const payload = jwt.verify(refreshToken, REFRESH_SECRET) as { id: string };
 
       const storedToken = await authRepository.findRefreshToken(refreshToken);
-      if (!storedToken) throw new Error('Refresh token inválido');
+      if (!storedToken) throw createAuthError('Refresh token inválido', 401);
 
       const user = await authRepository.findById(payload.id);
-      if (!user) throw new Error('Usuário não encontrado');
+      if (!user) throw createAuthError('Usuário não encontrado', 404);
 
       const accessToken = jwt.sign(
         { id: user.id, email: user.email, name: user.name },
@@ -204,7 +218,7 @@ export const authService = {
 
       return { accessToken };
     } catch {
-      throw new Error('Refresh token inválido ou expirado');
+      throw createAuthError('Refresh token inválido ou expirado', 401);
     }
   },
 
@@ -246,8 +260,8 @@ export const authService = {
       where: { token },
     });
 
-    if (!record) throw new Error('Token inválido');
-    if (new Date() > record.expires_at) throw new Error('Token expirado');
+    if (!record) throw createAuthError('Token inválido', 400);
+    if (new Date() > record.expires_at) throw createAuthError('Token expirado', 400);
 
     const newHash = await hash(newPassword, 10);
 

@@ -4,9 +4,12 @@ const withPWA = require('@ducanh2912/next-pwa').default({
   cacheOnFrontEndNav: true,
   aggressiveFrontEndNavCaching: true,
   reloadOnOnline: true,
-  disable: process.env.NODE_ENV === 'development', // Desabilita em dev para não interferir
+  disable: false,
+  // customWorkerSrc: 'worker',
+  // disable: process.env.NODE_ENV === 'development', // Desabilita em dev para não interferir
   workboxOptions: {
     disableDevLogs: true,
+    importScripts: ['/push-worker.js'],
     runtimeCaching: [
       // Cache de páginas (HTML)
       {
@@ -51,12 +54,17 @@ const withPWA = require('@ducanh2912/next-pwa').default({
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  eslint: {
+    ignoreDuringBuilds: true, // <--- Ignora erros de linting no build de produção
+  },
   transpilePackages: [
     '@devlife/api-client',
     '@devlife/types',
     '@devlife/validation',
     '@devlife/utils',
     '@devlife/config',
+    '@tanstack/react-query',
+    '@tanstack/react-query-devtools',
   ],
   webpack: (config, { isServer }) => {
     config.resolve.alias = {

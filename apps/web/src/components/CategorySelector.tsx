@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { apiClient } from '@devlife/api-client';
 import { TagIcon, CheckIcon } from '@heroicons/react/24/outline';
 
@@ -16,24 +16,14 @@ interface Props {
 }
 
 export default function CategorySelector({ selectedIds, onChange }: Props) {
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const fetchCategories = async () => {
-      try {
-        const response = await apiClient.get('/categories');
-        if (response.success) {
-          setCategories(response.data);
-        }
-      } catch (err) {
-        console.error('Erro ao carregar categorias:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchCategories();
-  }, []);
+  // 🆕 Uso do React Query para buscar categorias
+  const { data: categories = [], isLoading } = useQuery({
+    queryKey: ['categories'],
+    queryFn: async () => {
+      const response = await apiClient.get('/categories');
+      return response.success ? (response.data as Category[]) : [];
+    },
+  });
 
   const toggleCategory = (id: string) => {
     if (selectedIds.includes(id)) {
@@ -43,7 +33,7 @@ export default function CategorySelector({ selectedIds, onChange }: Props) {
     }
   };
 
-  if (loading) return <p className="text-sm text-gray-500">Carregando categorias...</p>;
+  if (isLoading) return <p className="text-sm text-gray-500 animate-pulse">Carregando categorias...</p>;
 
   if (categories.length === 0) {
     return (

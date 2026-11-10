@@ -4,7 +4,6 @@ import { authController } from '../controller/auth.controller';
 export async function authRoutes(fastify: FastifyInstance) {
   // ============================================
   // REGISTRO — 3 por hora por IP
-  // Evita criação em massa de contas
   // ============================================
   fastify.post(
     '/register',
@@ -21,7 +20,6 @@ export async function authRoutes(fastify: FastifyInstance) {
 
   // ============================================
   // LOGIN — 10 por 15 min por IP+email
-  // + bloqueio de conta após 5 falhas (no service)
   // ============================================
   fastify.post(
     '/login',
@@ -36,6 +34,7 @@ export async function authRoutes(fastify: FastifyInstance) {
           },
           errorResponseBuilder: (req, context) => {
             return {
+              statusCode: 429, // 🆕 ESSENCIAL: Define o status HTTP correto
               success: false,
               error: {
                 code: 'RATE_LIMITED',
@@ -52,14 +51,12 @@ export async function authRoutes(fastify: FastifyInstance) {
   );
 
   // ============================================
-  // VERIFICAR E-MAIL — sem rate limit agressivo
-  // (o usuário clica no link, então não precisa proteger muito)
+  // VERIFICAR E-MAIL
   // ============================================
   fastify.get('/verify-email', authController.verifyEmail);
 
   // ============================================
   // REENVIAR VERIFICAÇÃO — 3 por hora por IP
-  // Evita spam de e-mails
   // ============================================
   fastify.post(
     '/resend-verification',
@@ -76,7 +73,6 @@ export async function authRoutes(fastify: FastifyInstance) {
 
   // ============================================
   // ESQUECI SENHA — 3 por hora por IP
-  // Evita spam de e-mails de recuperação
   // ============================================
   fastify.post(
     '/forgot-password',
@@ -109,7 +105,6 @@ export async function authRoutes(fastify: FastifyInstance) {
 
   // ============================================
   // REFRESH — 30 por 15 min
-  // (é chamado quando o access token expira - precisa de folga)
   // ============================================
   fastify.post(
     '/refresh',

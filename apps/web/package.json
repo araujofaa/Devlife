@@ -20,6 +20,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@ducanh2912/next-pwa": "^10.2.9",
     "@heroicons/react": "^2.2.0",
+    "@tanstack/react-query-devtools": "^5.105.3",
     "framer-motion": "^13.0.0",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8",

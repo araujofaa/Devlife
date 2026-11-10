@@ -135,6 +135,7 @@ export const tasksController = {
   async getCounts(request: AuthRequest, reply: FastifyReply) {
     try {
       const userId = request.user!.id;
+      // 🆕 Agora retorna a contagem exata de 'in_progress'
       const counts = await tasksRepository.getCounts(userId);
       return reply.send({ success: true, data: counts });
     } catch (err: any) {
@@ -162,7 +163,7 @@ export const tasksController = {
           title: data.title,
           completed: data.completed || false,
           completed_at: data.completed ? new Date() : null,
-          due_date: data.due_date ? new Date(data.due_date) : null, // <-- NOVO
+          due_date: data.due_date ? new Date(data.due_date) : null,
         },
       });
 
@@ -182,7 +183,6 @@ export const tasksController = {
 
       await tasksService.getById(userId, id);
 
-      // 🆕 Ordena por due_date (nulos por último) e depois por order
       const subtasks = await prisma.subtask.findMany({
         where: { task_id: id },
         orderBy: [
@@ -228,12 +228,13 @@ export const tasksController = {
           updateData.completed_at = new Date();
         } else if (data.completed === false && current.completed) {
           updateData.completed_at = null;
+          updateData.reminder_sent = false; 
         }
       }
 
-      // 🆕 Converte due_date para Date
       if (data.due_date !== undefined) {
         updateData.due_date = data.due_date ? new Date(data.due_date) : null;
+        updateData.reminder_sent = false; 
       }
 
       const subtask = await prisma.subtask.update({
@@ -297,170 +298,166 @@ export const tasksController = {
   },
 
   // ============================================
-// 🆕 EXPORT — retorna JSON com tarefas + subtarefas
-// ============================================
-async export(request: AuthRequest, reply: FastifyReply) {
-  try {
-    const userId = request.user!.id;
-    const userEmail = request.user!.email;
+  // EXPORT — retorna JSON com tarefas + subtarefas
+  // ============================================
+  async export(request: AuthRequest, reply: FastifyReply) {
+    try {
+      const userId = request.user!.id;
+      const userEmail = request.user!.email;
 
-    const tasks = await prisma.task.findMany({
-      where: { user_id: userId, deleted_at: null },
-      include: {
-        subtasks: { orderBy: [{ order: 'asc' }, { created_at: 'asc' }] },
-        categories: { include: { category: true } },
-      },
-      orderBy: { created_at: 'asc' },
-    });
+      const tasks = await prisma.task.findMany({
+        where: { user_id: userId, deleted_at: null },
+        include: {
+          subtasks: { orderBy: [{ order: 'asc' }, { created_at: 'asc' }] },
+          categories: { include: { category: true } },
+        },
+        orderBy: { created_at: 'asc' },
+      });
 
-    const exportData = {
-      version: '1.0',
-      exported_at: new Date().toISOString(),
-      exported_by: userEmail,
-      total_tasks: tasks.length,
-      total_subtasks: tasks.reduce((acc, t) => acc + t.subtasks.length, 0),
-      tasks: tasks.map((t) => ({
-        title: t.title,
-        description: t.description,
-        priority: t.priority,
-        status: t.status,
-        due_date: t.due_date?.toISOString() || null,
-        recurrence_type: t.recurrence_type,
-        recurrence_interval: t.recurrence_interval,
-        recurrence_end_date: t.recurrence_end_date?.toISOString() || null,
-        categories: t.categories.map((tc) => tc.category.name),
-        subtasks: t.subtasks.map((s) => ({
-          title: s.title,
-          completed: s.completed,
-          due_date: s.due_date?.toISOString() || null,
-          order: s.order,
+      const exportData = {
+        version: '1.0',
+        exported_at: new Date().toISOString(),
+        exported_by: userEmail,
+        total_tasks: tasks.length,
+        total_subtasks: tasks.reduce((acc, t) => acc + t.subtasks.length, 0),
+        tasks: tasks.map((t) => ({
+          title: t.title,
+          description: t.description,
+          priority: t.priority,
+          status: t.status,
+          due_date: t.due_date?.toISOString() || null,
+          recurrence_type: t.recurrence_type,
+          recurrence_interval: t.recurrence_interval,
+          recurrence_end_date: t.recurrence_end_date?.toISOString() || null,
+          categories: t.categories.map((tc) => tc.category.name),
+          subtasks: t.subtasks.map((s) => ({
+            title: s.title,
+            completed: s.completed,
+            due_date: s.due_date?.toISOString() || null,
+            order: s.order,
+          })),
         })),
-      })),
-    };
+      };
 
-    return reply.send({ success: true, data: exportData });
-  } catch (err: any) {
-    return reply.status(500).send({
-      success: false,
-      error: { code: 'EXPORT_ERROR', message: err.message },
-    });
-  }
-},
+      return reply.send({ success: true, data: exportData });
+    } catch (err: any) {
+      return reply.status(500).send({
+        success: false,
+        error: { code: 'EXPORT_ERROR', message: err.message },
+      });
+    }
+  },
 
-// ============================================
-// 🆕 IMPORT — recebe JSON e cria tarefas
-// ============================================
-async import(request: AuthRequest, reply: FastifyReply) {
-  try {
-    const userId = request.user!.id;
-    const payload = importPayloadSchema.parse(request.body);
+  // ============================================
+  // IMPORT — recebe JSON e cria tarefas
+  // ============================================
+  async import(request: AuthRequest, reply: FastifyReply) {
+    try {
+      const userId = request.user!.id;
+      const payload = importPayloadSchema.parse(request.body);
 
-    const options = payload.options || {
-      preserve_completed: false,
-      skip_duplicates: true,
-    };
+      const options = payload.options || {
+        preserve_completed: false,
+        skip_duplicates: true,
+      };
 
-    const result = {
-      imported: 0,
-      skipped: 0,
-      categories_created: 0,
-      subtasks_imported: 0,
-      errors: [] as string[],
-    };
+      const result = {
+        imported: 0,
+        skipped: 0,
+        categories_created: 0,
+        subtasks_imported: 0,
+        errors: [] as string[],
+      };
 
-    for (const taskData of payload.tasks) {
-      try {
-        // 1. Verifica duplicata (título + data)
-        if (options.skip_duplicates) {
-          const existing = await prisma.task.findFirst({
-            where: {
-              user_id: userId,
-              title: taskData.title,
-              due_date: taskData.due_date
-                ? new Date(taskData.due_date)
-                : null,
-              deleted_at: null,
-            },
-          });
-
-          if (existing) {
-            result.skipped++;
-            continue;
-          }
-        }
-
-        // 2. Processa categorias (find-or-create)
-        const categoryIds: string[] = [];
-        for (const catName of taskData.categories || []) {
-          const trimmed = catName.trim();
-          if (!trimmed) continue;
-
-          let cat = await prisma.category.findFirst({
-            where: {
-              user_id: userId,
-              name: { equals: trimmed, mode: 'insensitive' },
-            },
-          });
-
-          if (!cat) {
-            cat = await prisma.category.create({
-              data: {
+      for (const taskData of payload.tasks) {
+        try {
+          if (options.skip_duplicates) {
+            const existing = await prisma.task.findFirst({
+              where: {
                 user_id: userId,
-                name: trimmed,
-                color: '#3b82f6',
-                icon: 'tag',
+                title: taskData.title,
+                due_date: taskData.due_date
+                  ? new Date(taskData.due_date)
+                  : null,
+                deleted_at: null,
               },
             });
-            result.categories_created++;
+
+            if (existing) {
+              result.skipped++;
+              continue;
+            }
           }
 
-          categoryIds.push(cat.id);
+          const categoryIds: string[] = [];
+          for (const catName of taskData.categories || []) {
+            const trimmed = catName.trim();
+            if (!trimmed) continue;
+
+            let cat = await prisma.category.findFirst({
+              where: {
+                user_id: userId,
+                name: { equals: trimmed, mode: 'insensitive' },
+              },
+            });
+
+            if (!cat) {
+              cat = await prisma.category.create({
+                data: {
+                  user_id: userId,
+                  name: trimmed,
+                  color: '#3b82f6',
+                  icon: 'tag',
+                },
+              });
+              result.categories_created++;
+            }
+
+            categoryIds.push(cat.id);
+          }
+
+          await prisma.task.create({
+            data: {
+              user_id: userId,
+              title: taskData.title,
+              description: taskData.description || null,
+              priority: taskData.priority,
+              status: options.preserve_completed ? taskData.status : 'pending',
+              due_date: taskData.due_date ? new Date(taskData.due_date) : null,
+              recurrence_type: taskData.recurrence_type || null,
+              recurrence_interval: taskData.recurrence_interval || null,
+              recurrence_end_date: taskData.recurrence_end_date
+                ? new Date(taskData.recurrence_end_date)
+                : null,
+              categories: {
+                create: categoryIds.map((cid) => ({ category_id: cid })),
+              },
+              subtasks: {
+                create: (taskData.subtasks || []).map((s, idx) => ({
+                  title: s.title,
+                  completed: options.preserve_completed ? s.completed : false,
+                  completed_at:
+                    options.preserve_completed && s.completed ? new Date() : null,
+                  due_date: s.due_date ? new Date(s.due_date) : null,
+                  order: s.order ?? idx,
+                })),
+              },
+            },
+          });
+
+          result.imported++;
+          result.subtasks_imported += taskData.subtasks?.length || 0;
+        } catch (taskError: any) {
+          result.errors.push(`"${taskData.title}": ${taskError.message}`);
         }
-
-        // 3. Cria a tarefa (com subtarefas)
-        await prisma.task.create({
-          data: {
-            user_id: userId,
-            title: taskData.title,
-            description: taskData.description || null,
-            priority: taskData.priority,
-            status: options.preserve_completed ? taskData.status : 'pending',
-            due_date: taskData.due_date ? new Date(taskData.due_date) : null,
-            recurrence_type: taskData.recurrence_type || null,
-            recurrence_interval: taskData.recurrence_interval || null,
-            recurrence_end_date: taskData.recurrence_end_date
-              ? new Date(taskData.recurrence_end_date)
-              : null,
-            categories: {
-              create: categoryIds.map((cid) => ({ category_id: cid })),
-            },
-            subtasks: {
-              create: (taskData.subtasks || []).map((s, idx) => ({
-                title: s.title,
-                completed: options.preserve_completed ? s.completed : false,
-                completed_at:
-                  options.preserve_completed && s.completed ? new Date() : null,
-                due_date: s.due_date ? new Date(s.due_date) : null,
-                order: s.order ?? idx,
-              })),
-            },
-          },
-        });
-
-        result.imported++;
-        result.subtasks_imported += taskData.subtasks?.length || 0;
-      } catch (taskError: any) {
-        result.errors.push(`"${taskData.title}": ${taskError.message}`);
       }
+
+      return reply.send({ success: true, data: result });
+    } catch (err: any) {
+      return reply.status(400).send({
+        success: false,
+        error: { code: 'IMPORT_ERROR', message: err.message },
+      });
     }
-
-    return reply.send({ success: true, data: result });
-  } catch (err: any) {
-    return reply.status(400).send({
-      success: false,
-      error: { code: 'IMPORT_ERROR', message: err.message },
-    });
-  }
- },
-
+  },
 };

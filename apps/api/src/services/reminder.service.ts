@@ -1,7 +1,7 @@
 import { prisma } from '../shared/database/prisma';
 import { notificationService } from '../modules/notifications/service/notification.service';
 import { pushService } from '../modules/notifications/service/push.service';
-import { sendWhatsAppMessage } from './whatsapp.service';
+import { sendWhatsAppTemplate } from './whatsapp.service';
 
 export async function checkUpcomingTasks() {
   console.log('[Reminder] Verificando tarefas e subtarefas vencendo...');
@@ -18,28 +18,29 @@ export async function checkUpcomingTasks() {
   });
 
   for (const user of users) {
-    if (!user.phone_number) continue;
-
-    const phoneNumber: string = user.phone_number;
-    const cleanPhone: string = phoneNumber.replace(/\D/g, '');
+    const phoneNumber = user.phone_number;
+    const cleanPhone = phoneNumber ? phoneNumber.replace(/\D/g, '') : null;
+    
     const offsetHours = user.reminder_offset_hours || 24;
     const threshold = new Date(now.getTime() + offsetHours * 60 * 60 * 1000);
 
-    // 1. TAREFAS principais
+    // 1. TAREFAS principais (🆕 Filtra por reminder_sent: false)
     const tasks = await prisma.task.findMany({
       where: {
         user_id: user.id,
         due_date: { gte: now, lte: threshold },
         status: 'pending',
+        reminder_sent: false, // 🆕 Só pega as que ainda não foram notificadas
       },
     });
 
-    // 2. SUBTAREFAS pendentes
+    // 2. SUBTAREFAS pendentes (🆕 Filtra por reminder_sent: false)
     const subtasks = await prisma.subtask.findMany({
       where: {
         completed: false,
         due_date: { gte: now, lte: threshold },
         task: { user_id: user.id, deleted_at: null },
+        reminder_sent: false, // 🆕 Só pega as que ainda não foram notificadas
       },
       include: { task: { select: { id: true, title: true } } },
     });
@@ -57,10 +58,6 @@ export async function checkUpcomingTasks() {
       const title = '📅 O prazo para concluir a tarefa vence em breve!';
       const messageText = `O prazo para concluir a tarefa "${task.title}" vence em ${dueDate}. Não se esqueça!`;
       
-      // 🆕 LINKS DEEP LINKING
-      const appLink = `devlife://tasks/${task.id}/edit`;
-      const webLink = `https://www.listapday.com.br/tasks/${task.id}/edit`;
-
       await notificationService.create(user.id, title, messageText);
       
       try {
@@ -69,14 +66,24 @@ export async function checkUpcomingTasks() {
         console.error(`[Reminder] Erro ao enviar push:`, pushError);
       }
 
-      try {
-        await sendWhatsAppMessage({
-          to: cleanPhone,
-          message: `Olá, ${user.name}!\n\n${title}\n${messageText}\n\n👉 Abrir no App: ${appLink}\n🌐 Abrir na Web: ${webLink}`,
-        });
-      } catch (whatsappError) {
-        console.error(`[Reminder] Erro ao enviar WhatsApp:`, whatsappError);
+      if (cleanPhone) {
+        try {
+          await sendWhatsAppTemplate({
+            to: cleanPhone,
+            templateName: 'lembrete_tarefa_vencendo',
+            languageCode: 'pt_BR',
+            parameters: [user.name, task.title, dueDate]
+          });
+        } catch (whatsappError) {
+          console.error(`[Reminder] Erro ao enviar WhatsApp:`, whatsappError);
+        }
       }
+
+      // 🆕 MARCA COMO NOTIFICADA NO BANCO
+      await prisma.task.update({
+        where: { id: task.id },
+        data: { reminder_sent: true } as any,
+      });
     }
 
     // Notifica SUBTAREFAS
@@ -90,26 +97,32 @@ export async function checkUpcomingTasks() {
       const title = '✅ Prazo para concluir subtarefa vence em breve!';
       const messageText = `O prazo para concluir a subtarefa "${subtask.title}" (da tarefa "${subtask.task.title}") vence em ${dueDate}.`;
 
-      // 🆕 LINKS DEEP LINKING
-      const appLink = `devlife://tasks/${subtask.task.id}/edit`;
-      const webLink = `https://www.listapday.com.br/tasks/${subtask.task.id}/edit`;
-
       await notificationService.create(user.id, title, messageText);
-
+      
       try {
         await pushService.sendPushToUser(user.id, title, messageText, { taskId: subtask.task.id });
       } catch (pushError) {
         console.error(`[Reminder] Erro ao enviar push:`, pushError);
       }
 
-      try {
-        await sendWhatsAppMessage({
-          to: cleanPhone,
-          message: `Olá, ${user.name}!\n\n${title}\n${messageText}\n\n👉 Abrir no App: ${appLink}\n🌐 Abrir na Web: ${webLink}`,
-        });
-      } catch (whatsappError) {
-        console.error(`[Reminder] Erro ao enviar WhatsApp:`, whatsappError);
+      if (cleanPhone) {
+        try {
+          await sendWhatsAppTemplate({
+            to: cleanPhone,
+            templateName: 'lembrete_tarefa_vencendo',
+            languageCode: 'pt_BR',
+            parameters: [user.name, subtask.title, dueDate]
+          });
+        } catch (whatsappError) {
+          console.error(`[Reminder] Erro ao enviar WhatsApp:`, whatsappError);
+        }
       }
+
+      // 🆕 MARCA COMO NOTIFICADA NO BANCO
+      await prisma.subtask.update({
+        where: { id: subtask.id },
+        data: { reminder_sent: true } as any,
+      });
     }
   }
 }

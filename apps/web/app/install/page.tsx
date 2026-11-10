@@ -69,11 +69,11 @@ export default function InstallPage() {
             <div className="text-left text-sm text-gray-600 dark:text-gray-400 space-y-3 mt-4">
               <div>
                 <strong className="text-gray-900 dark:text-white">No Android (Chrome):</strong>
-                <p>Menu (3 pontos) → "Instalar app" ou "Adicionar à tela inicial"</p>
+                <p>Menu (3 pontos) → &quotInstalar app" ou &quotAdicionar à tela inicial&quot;</p>
               </div>
               <div>
                 <strong className="text-gray-900 dark:text-white">No iOS (Safari):</strong>
-                <p>Botão Compartilhar → "Adicionar à Tela de Início"</p>
+                <p>Botão Compartilhar → &quotAdicionar à Tela de Início&quot;</p>
               </div>
               <div>
                 <strong className="text-gray-900 dark:text-white">No Desktop (Chrome/Edge):</strong>

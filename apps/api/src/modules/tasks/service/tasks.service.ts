@@ -15,7 +15,7 @@ export const tasksService = {
     return tasksRepository.create({
       ...rest,
       user: { connect: { id: userId } },
-      ...(start_date && { start_date: new Date(start_date) }), // 🆕
+      ...(start_date && { start_date: new Date(start_date) }),
       ...(due_date && { due_date: new Date(due_date) }),
       ...(recurrence_end_date && {
         recurrence_end_date: new Date(recurrence_end_date),
@@ -30,9 +30,16 @@ export const tasksService = {
       due_date_from, due_date_to, page, limit,
     } = filters;
 
+    // 🆕 CORREÇÃO: Converte as strings de data para Date (ou undefined se não existirem)
     return tasksRepository.findAll(userId, {
-      search, priority, status, categoryId,
-      due_date_from, due_date_to, page, limit,
+      search, 
+      priority, 
+      status, 
+      categoryId,
+      due_date_from: due_date_from ? new Date(due_date_from) : undefined,
+      due_date_to: due_date_to ? new Date(due_date_to) : undefined,
+      page, 
+      limit,
     });
   },
 
@@ -49,13 +56,22 @@ export const tasksService = {
     const updateData: any = { ...data };
     
     if (data.start_date !== undefined) {
-      updateData.start_date = data.start_date ? new Date(data.start_date) : null; // 🆕
+      updateData.start_date = data.start_date ? new Date(data.start_date) : null;
     }
+    
     if (data.due_date !== undefined) {
       updateData.due_date = data.due_date ? new Date(data.due_date) : null;
+      // 🆕 Se a data de vencimento mudou, reseta o status de notificação
+      updateData.reminder_sent = false; 
     }
+    
     if (data.recurrence_end_date !== undefined) {
       updateData.recurrence_end_date = data.recurrence_end_date ? new Date(data.recurrence_end_date) : null;
+    }
+
+    // 🆕 Se a tarefa estava concluída e foi reaberta (voltou para pending/in_progress), reseta a notificação
+    if ((data.status === 'pending' || data.status === 'in_progress') && task.status === 'done') {
+      updateData.reminder_sent = false;
     }
 
     // Detecta mudança de status para "done"

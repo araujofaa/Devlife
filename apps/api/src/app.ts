@@ -23,6 +23,7 @@ import { whatsappWebhookRoutes } from './modules/webhooks/whatsapp.routes';
 export async function buildApp(options: { logger?: boolean } = {}): Promise<FastifyInstance> {
   const fastify = Fastify({
     logger: options.logger ?? false,
+    trustProxy: true, // 🆕 Permite que o Fastify leia o IP real do X-Forwarded-For enviado pelo Nginx/Cloudflare
   });
 
   // 🆕 Configuração de CORS flexível para dev e prod
@@ -37,7 +38,6 @@ export async function buildApp(options: { logger?: boolean } = {}): Promise<Fast
       }
 
       // 3. Permite IPs de rede local (Expo Web/Go em celular físico na mesma rede Wi-Fi)
-      // Regex que aceita 192.168.x.x, 10.x.x.x, 172.16.x.x até 172.31.x.x
       const localIpRegex = /^http:\/\/(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)\d+\.\d+(:\d+)?$/;
       if (localIpRegex.test(origin)) {
         return callback(null, true);
@@ -74,6 +74,7 @@ export async function buildApp(options: { logger?: boolean } = {}): Promise<Fast
     },
     errorResponseBuilder: (req, context) => {
       return {
+        statusCode: 429, // 🆕 ESSENCIAL: Retorna o status HTTP correto no limite global
         success: false,
         error: {
           code: 'RATE_LIMITED',

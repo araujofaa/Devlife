@@ -15,6 +15,7 @@ nodeLinker: hoisted
 overrides:
   '@types/react': 18.2.79
   '@types/react-dom': 18.2.25
+  '@tanstack/react-query': '^5.0.0'
 
 allowedDeprecatedVersions:
   # Silencia avisos de subdependências que não controlamos
